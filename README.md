@@ -28,6 +28,8 @@
 
 AniFlow downloads manhwa/webtoon chapters, detects and crops panels using YOLO, extracts speech-bubble text, generates AI narration, converts it to speech, and renders video clips — all through a browser-based UI.
 
+**中文剧情分析与解说审核（第一阶段）**：新增逐分镜 Story Bible、事件规划、三种中文风格、原图逐句核验、审核锁定和单段重写。可在 Review Text 使用，或运行 `python story_app.py serve` 启动独立文案审核入口。详见 [使用与验收文档](docs/story-system.md)。
+
 ## ✨ Features
 
 - 🌐 **Web Scraper** — download chapters from manhuaus, manhwatop, MangaDex, and more

@@ -146,6 +146,7 @@ class OpenAICompatTransport(BaseTransport):
              system: str | None = None, temperature: float = 0.7, top_p: float = 0.9,
              max_tokens: int | None = None, repeat_penalty: float | None = None,
              top_k: int | None = None, keep_alive: str | None = None,
+             extra_body: dict | None = None,
              timeout=DEFAULT_TIMEOUT) -> str:
         # top_k and keep_alive are Ollama-only; an OpenAI-compatible server has
         # no equivalent, so they are dropped rather than guessed at.
@@ -173,6 +174,12 @@ class OpenAICompatTransport(BaseTransport):
             # Ollama multiplies token scores (1.0 = off); OpenAI's
             # frequency_penalty is additive over 0..2. Closest sibling, not equal.
             payload["frequency_penalty"] = round(max(0.0, min(2.0, (repeat_penalty - 1.0) * 2)), 2)
+        if extra_body:
+            # Provider options cannot replace messages, models or authentication.
+            allowed = {"thinking", "reasoning_effort", "response_format"}
+            if not set(extra_body).issubset(allowed):
+                raise ValueError("Unsupported provider options")
+            payload.update(extra_body)
         data = self._post(f"{self.host}/v1/chat/completions", payload, self.headers, timeout)
         choices = data.get("choices") or [{}]
         message = choices[0].get("message") or {}

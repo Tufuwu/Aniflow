@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AniFlow · 第一话剧情审核</title>
+<link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/story_review.css">
+</head>
+<body><main style="max-width:1240px;margin:32px auto;padding:0 20px">
+<h1>AniFlow · Review Text</h1><p>第一阶段：剧情分析、中文解说与人工审核</p>
+<form id="storyProjectForm" class="story-toolbar"><label for="storyProject">项目名</label>
+<input id="storyProject" required pattern="[\w\-\u4e00-\u9fff]+" value="first-chapter" style="padding:10px">
+<button class="btn btn-primary">打开审核</button></form><div id="storyReview"></div>
+</main><script src="/static/js/story_review.js"></script>
+<script>
+const input = document.getElementById('storyProject');
+input.value = new URLSearchParams(location.search).get('project') || 'first-chapter';
+const openReview = () => StoryReview.mount(document.getElementById('storyReview'), input.value);
+document.getElementById('storyProjectForm').onsubmit = event => {event.preventDefault();openReview();};
+openReview();
+</script></body></html>

@@ -1,0 +1,25 @@
+{
+  "title": "人工验收样例：门口的雨伞（原创测试剧情，不是真实漫画）",
+  "panels": [
+    {"panel_id":"1","description":"林夏把红伞交给陈默；陈默胸牌写着姓名。","dialogue":"拿着伞，外面下雨了。","event":"林夏把红伞交给陈默。","role":"setup","importance":3},
+    {"panel_id":"2","description":"陈默推开门，门外是大雨；一名陌生人站在屋檐下。","dialogue":"你终于来了。","event":"陈默开门，看见屋檐下的陌生人。","role":"conflict","importance":4},
+    {"panel_id":"3","description":"陌生人伸手，红伞上的徽记发光；没有人解释原因。","dialogue":"","event":"陌生人伸手，红伞上的徽记发光。","role":"climax","importance":5}
+  ],
+  "checks": [
+    {"text":"林夏把红伞交给陈默。","expected":"supported"},
+    {"text":"陈默把红伞交给林夏。","expected":"character_confusion"},
+    {"text":"门外阳光明媚。","expected":"event_contradiction"},
+    {"text":"陌生人就是陈默的父亲。","expected":"unsupported"},
+    {"text":"因为陈默开门，徽记才会发光。","expected":"wrong_causality"},
+    {"text":"陈默明天将加入秘密组织。","expected":"unsupported"}
+  ],
+  "human_acceptance": [
+    "三张分镜都出现在 Story Bible，包括第三张无对白动作",
+    "角色姓名必须有画面或对白依据，陌生人保持未知身份",
+    "徽记发光之前发生开门，不应自动形成因果边",
+    "三种风格都不编造父子关系、秘密组织或发光原因",
+    "每段可打开绑定事件的原图，逐句显示核验依据",
+    "驳回和编辑后重新核验；通过并锁定后不能重写",
+    "原图哈希不变，旧版本仍能查看审核前后的内容"
+  ]
+}

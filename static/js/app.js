@@ -2180,6 +2180,7 @@ function renderReview2Step() {
       Review the dialogue extracted from each panel's speech bubbles.
       This exact text becomes the panel's audio — edit anything the AI misread, then continue.
     </p>`}
+    ${isNarrated ? '<div id="storyReviewSlot"></div>' : ''}
     <div id="panelTextReviewList" style="margin-top: 20px;">
       <div class="empty-state">
         <div class="spinner spinner-lg" style="margin:0 auto 12px"></div>
@@ -2196,6 +2197,9 @@ function renderReview2Step() {
     </div>`;
 
   loadNarrationReview();
+  if (isNarrated && window.StoryReview) {
+    StoryReview.mount(document.getElementById('storyReviewSlot'), APP.projectName);
+  }
 }
 window.renderReview2Step = renderReview2Step;
 

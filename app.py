@@ -44,6 +44,19 @@ def progress_callback(stage, current, total, message):
 
 orchestrator.add_progress_callback(progress_callback)
 
+# Story review reuses chapter state and original bubble panels without invoking
+# the video orchestrator. First phase intentionally accepts chapter one only.
+from pipeline.story_api import create_story_blueprint
+
+def _story_panels(project_name):
+    from pipeline.story_bible import StoryError
+    state = PipelineState.load(project_name)
+    if state.current_chapter not in (0, 1):
+        raise StoryError('第一阶段仅处理第一话，请切换到第一话')
+    return state.panels_with_text or [p for p in state.panels if p.get('raw_path')]
+
+app.register_blueprint(create_story_blueprint(panel_provider=_story_panels))
+
 # ─── Page Routes ─────────────────────────────────────────────────
 @app.route('/')
 def index():

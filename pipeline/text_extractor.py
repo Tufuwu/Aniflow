@@ -265,31 +265,12 @@ def _extract_text_and_description(image_path: str, vision_model: str,
         image_b64 = base64.b64encode(f.read()).decode('utf-8')
 
     prompt = (
-        "TASK: Extract ONLY English dialogue and narration from this manhwa panel.\n\n"
-        "CRITICAL RULES:\n"
-        "✓ ONLY extract text that is in ENGLISH LANGUAGE\n"
-        "✗ NEVER extract Korean characters (한글/hangul)\n"
-        "✗ NEVER extract Chinese characters (汉字/hanzi)\n"
-        "✗ NEVER extract Japanese characters (漢字/kanji, ひらがな/hiragana, カタカナ/katakana)\n"
-        "✗ NEVER extract any non-Latin script characters\n\n"
-        "INCLUDE:\n"
-        "- Text inside speech bubbles (white/colored rounded shapes characters speak through)\n"
-        "- Text inside thought bubbles\n"
-        "- Text inside narration boxes (rectangular boxes with story narration)\n"
-        "- ONLY if the text uses English alphabet (A-Z, a-z)\n\n"
-        "EXCLUDE (do NOT extract):\n"
-        "- ANY text with Korean/Chinese/Japanese/non-Latin characters\n"
-        "- Signs, posters, and labels in the scene (e.g. shop names, door signs)\n"
-        "- Sound effects and onomatopoeia (e.g. CRASH, BANG, sfx text)\n"
-        "- Curse/swear symbols (e.g. #@$!!, %&?!, ****)\n"
-        "- Title cards, chapter headers, timestamps\n"
-        "- Background text, watermarks, credits\n\n"
-        "FORMAT:\n"
-        "- One line per bubble/box, exactly as written\n"
-        "- Do NOT add speaker labels or prefixes\n"
-        "- If there is no ENGLISH text to extract, output: NONE\n"
-        "- Do NOT invent or hallucinate text\n\n"
-        "Extract ENGLISH text only now:"
+        "Extract the visible dialogue, thoughts and story narration exactly as written.\n"
+        "Preserve the original language, including simplified/traditional Chinese, "
+        "Japanese, Korean and English. Never translate or invent missing text.\n"
+        "Return one utterance per line; no speaker prefixes or explanations.\n"
+        "Exclude watermarks, credits and meaningless symbol-only sound effects.\n"
+        "If there is no readable text, return NONE."
     )
 
     try:
@@ -358,29 +339,10 @@ def _parse_vision_response(raw: str) -> tuple[str, str]:
         if not line:
             continue
         
-        # FILTER OUT NON-ENGLISH CHARACTERS
-        # Remove any Korean (Hangul) characters: U+AC00 to U+D7AF
-        # Remove any Chinese/Japanese (CJK Unified Ideographs): U+4E00 to U+9FFF
-        # Remove Japanese Hiragana: U+3040 to U+309F
-        # Remove Japanese Katakana: U+30A0 to U+30FF
-        line = re.sub(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+', '', line)
-        line = line.strip()
-        
-        # Skip if line is now empty after filtering
-        if not line:
+        # Keep source-language evidence intact. Symbol-only lines are not dialogue.
+        if not any(c.isalpha() or c.isdigit() for c in line):
             continue
-            
-        # Skip lines that are mostly symbols/punctuation (curse symbols, sfx)
-        # e.g. "#@$!!", "%&?!", "***", "!!!", "..."
-        alpha_chars = sum(1 for c in line if c.isalpha())
-        if alpha_chars < 2:
-            continue
-            
-        # Additional check: ensure at least 50% of alphabetic characters are Latin (English)
-        latin_chars = sum(1 for c in line if c.isalpha() and ord(c) < 0x0370)  # Latin range
-        if alpha_chars > 0 and latin_chars / alpha_chars < 0.5:
-            continue
-            
+
         text_lines.append(line)
 
     return '\n'.join(text_lines), visual_part.strip()

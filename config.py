@@ -3,6 +3,9 @@ Configuration settings for Manhwa Auto Recap Maker
 Full-featured local pipeline for manhwa/webtoon recap videos.
 """
 import os
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -52,6 +55,12 @@ MANHWA_PANEL_WITH_BUBBLE_DIR = os.path.join(OUTPUT_DIR, "Manhwa_panel_with_bubbl
 PANEL_BUBBLE_DIR             = os.path.join(OUTPUT_DIR, "panel_bubble")
 EXTRACTED_TXT_DIR            = os.path.join(OUTPUT_DIR, "extracted_txt")
 NARRATION_DIR                = os.path.join(OUTPUT_DIR, "narration")
+STORY_DIR                    = os.path.join(OUTPUT_DIR, "story")
+STORY_API_BASE               = os.getenv("STORY_API_BASE", "").rstrip("/")
+STORY_API_KEY                = os.getenv("STORY_API_KEY", "")
+STORY_VISION_MODEL           = os.getenv("STORY_VISION_MODEL", os.getenv("VISION_MODEL", "qwen2.5vl:3b"))
+STORY_WRITER_MODEL           = os.getenv("STORY_WRITER_MODEL", os.getenv("TEXT_WRITER_MODEL", "gemma3:27b"))
+STORY_CHECKER_MODEL          = os.getenv("STORY_CHECKER_MODEL", STORY_VISION_MODEL)
 AUDIO_OUTPUT_DIR             = os.path.join(OUTPUT_DIR, "audio")
 VIDEO_OUTPUT_DIR             = os.path.join(OUTPUT_DIR, "video")
 

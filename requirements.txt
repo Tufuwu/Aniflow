@@ -1,6 +1,8 @@
 # ─── Core web app ─────────────────────────────────────
 flask>=3.0
 flask-socketio>=5.3
+python-dotenv>=1.0
+filelock>=3.13
 aiofiles>=23.0
 
 # ─── Image / video processing ─────────────────────────

@@ -909,6 +909,12 @@ class PipelineState:
 
 
 class Orchestrator:
+    def story_editor(self, project_name):
+        """Separate single-chapter workflow; never routes through batch processing."""
+        from pipeline.story_api import story_store
+        from pipeline.shot_pipeline import ShotEditingPipeline
+        return ShotEditingPipeline(story_store(project_name))
+
     def __init__(self):
         self.narrator = Narrator()
         self.rewriter = ScriptRewriter()

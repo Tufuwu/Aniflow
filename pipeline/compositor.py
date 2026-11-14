@@ -31,6 +31,12 @@ RESOLUTION_MAP = {
 }
 FPS_OPTIONS = [30, 60]
 
+
+def compose_story_timeline(store, source, timeline, output_dir, progress_callback=None):
+    """Approved, evidence-constrained single-chapter portrait export."""
+    from pipeline.timeline_compositor import render_timeline
+    return render_timeline(store, source, timeline, output_dir, progress_callback)
+
 # ⚡ SPEED MODE: cached probe result for the macOS hardware encoder
 _VT_PROBE = None
 # ⚡ SPEED MODE: vignette arrays depend only on (width, height) — cache them

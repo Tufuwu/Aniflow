@@ -56,6 +56,8 @@ def _story_panels(project_name):
     return state.panels_with_text or [p for p in state.panels if p.get('raw_path')]
 
 app.register_blueprint(create_story_blueprint(panel_provider=_story_panels))
+from pipeline.shot_api import create_shot_blueprint
+app.register_blueprint(create_shot_blueprint())
 
 # ─── Page Routes ─────────────────────────────────────────────────
 @app.route('/')

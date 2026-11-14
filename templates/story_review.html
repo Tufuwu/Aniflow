@@ -1,19 +1,26 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AniFlow · 第一话剧情审核</title>
+<title>AniFlow · 章节剧情审核</title>
 <link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/story_review.css">
 </head>
 <body><main style="max-width:1240px;margin:32px auto;padding:0 20px">
-<h1>AniFlow · Review Text</h1><p>第一阶段：剧情分析、中文解说与人工审核</p>
+<h1>AniFlow · Review Text</h1><p>第一阶段：剧情分析、中文解说与人工审核 · <a id="shot-link" href="/shot-review">进入分镜剪辑</a></p>
 <form id="storyProjectForm" class="story-toolbar"><label for="storyProject">项目名</label>
 <input id="storyProject" required pattern="[\w\-\u4e00-\u9fff]+" value="first-chapter" style="padding:10px">
+<label for="storyChapter">话数</label><input id="storyChapter" type="number" min="1" max="99999" value="1" required style="padding:10px;width:100px">
 <button class="btn btn-primary">打开审核</button></form><div id="storyReview"></div>
 </main><script src="/static/js/story_review.js"></script>
 <script>
 const input = document.getElementById('storyProject');
 input.value = new URLSearchParams(location.search).get('project') || 'first-chapter';
-const openReview = () => StoryReview.mount(document.getElementById('storyReview'), input.value);
+const chapterInput = document.getElementById('storyChapter');
+chapterInput.value = new URLSearchParams(location.search).get('chapter') || '1';
+const openReview = () => {
+  document.getElementById('shot-link').href = '/shot-review?project=' + encodeURIComponent(input.value);
+  document.getElementById('shot-link').hidden = chapterInput.value !== '1';
+  StoryReview.mount(document.getElementById('storyReview'), input.value, chapterInput.value);
+};
 document.getElementById('storyProjectForm').onsubmit = event => {event.preventDefault();openReview();};
 openReview();
 </script></body></html>

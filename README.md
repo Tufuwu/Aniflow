@@ -30,6 +30,12 @@ AniFlow downloads manhwa/webtoon chapters, detects and crops panels using YOLO, 
 
 **中文剧情分析与解说审核（第一阶段）**：新增逐分镜 Story Bible、事件规划、三种中文风格、原图逐句核验、审核锁定和单段重写。可在 Review Text 使用，或运行 `python story_app.py serve` 启动独立文案审核入口。详见 [使用与验收文档](docs/story-system.md)。
 
+**剧情驱动分镜剪辑（单话验证）**：在已审核文案之上增加证据约束选镜、全局镜头优化、重复压缩、人工锁定、非破坏性裁切、实际 TTS 时间轴和 1080×1920 H.264 导出。主界面点击“剧情分镜剪辑”，或访问 `/shot-review`。详见 [剪辑工作台与验收](docs/shot-editing.md)。
+
+**配音导演与试听审核**：根据剧情标注逐句语气、重音、语速和额外停顿，支持悬疑、热血、冷面吐槽三种风格，升级 ElevenLabs v4/v3 表演标签，提供多版本试听、人工锁定及已审核配音排轴。详见 [配音导演说明](docs/voice-direction.md)。
+
+**以故事推进为目标的生成流程**：完整分镜准备、多事件叙事节点、整稿写作、转折完整性检查、看图选镜和实际裁切复核。篇幅随剧情决定，提供只读缓存的离线预览入口。详见 [改造与离线验收范围](docs/engagement-acceptance.md)。
+
 ## ✨ Features
 
 - 🌐 **Web Scraper** — download chapters from manhuaus, manhwatop, MangaDex, and more

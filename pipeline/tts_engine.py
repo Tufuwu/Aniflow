@@ -4,56 +4,45 @@ Text-to-Speech Engine - Unified TTS supporting Edge-TTS, Kokoro TTS, and ElevenL
 import os, asyncio, json
 import edge_tts
 import config
+from pipeline.story_bible import atomic_json, digest
 from pipeline.kokoro_tts import get_kokoro_tts, KOKORO_AVAILABLE
 from pipeline.elevenlabs_tts import get_elevenlabs_tts, ELEVENLABS_AVAILABLE
 
 async def _generate_speech_edge(text, output_path, voice=None, rate=None, pitch=None):
-    voice = voice or config.TTS_VOICE
-    rate = rate or config.TTS_RATE
-    pitch = pitch or config.TTS_PITCH
-    comm = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
-    await comm.save(output_path)
-    subtitle_path = output_path.rsplit('.', 1)[0] + '.srt'
-    try:
-        submaker = edge_tts.SubMaker()
-        async for chunk in edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch).stream():
-            if chunk["type"] == "WordBoundary":
-                submaker.feed(chunk)
-        srt_text = submaker.get_srt() if hasattr(submaker, 'get_srt') else submaker.generate_subs()
-        with open(subtitle_path, 'w', encoding='utf-8') as f:
-            f.write(srt_text)
-    except Exception as e:
-        print(f"[TTS] Subtitle generation warning: {e}")
-        subtitle_path = None
-    duration = _get_audio_duration(output_path)
-    return {'audio_path': output_path, 'subtitle_path': subtitle_path, 'duration': duration}
+    return await _generate_speech_edge_single_stream(text, output_path, voice, rate, pitch)
 
 
 async def _generate_speech_edge_single_stream(text, output_path, voice=None, rate=None, pitch=None):
-    """⚡ SPEED MODE variant: audio AND subtitles from ONE stream instead of
-    two separate network requests. Same output, half the transfers."""
+    """Keep audio and word timings from one continuous performance."""
     voice = voice or config.TTS_VOICE
     rate = rate or config.TTS_RATE
     pitch = pitch or config.TTS_PITCH
+    import hashlib
+    from pathlib import Path
+    boundaries = []
     subtitle_path = output_path.rsplit('.', 1)[0] + '.srt'
+    submaker = edge_tts.SubMaker()
+    with open(output_path, 'wb') as stream:
+        async for chunk in edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch,
+                                                 boundary='WordBoundary').stream():
+            if chunk['type'] == 'audio':
+                stream.write(chunk['data'])
+            elif chunk['type'] in {'WordBoundary','SentenceBoundary'}:
+                submaker.feed(chunk)
+                boundaries.append({'text':chunk['text'], 'start':chunk['offset']/10000000,
+                                   'end':(chunk['offset']+chunk['duration'])/10000000})
     try:
-        submaker = edge_tts.SubMaker()
-        with open(output_path, 'wb') as f:
-            async for chunk in edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch).stream():
-                if chunk["type"] == "audio":
-                    f.write(chunk["data"])
-                elif chunk["type"] == "WordBoundary":
-                    submaker.feed(chunk)
         srt_text = submaker.get_srt() if hasattr(submaker, 'get_srt') else submaker.generate_subs()
         with open(subtitle_path, 'w', encoding='utf-8') as f:
             f.write(srt_text)
     except Exception as e:
         print(f"[TTS] Subtitle generation warning: {e}")
         subtitle_path = None
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise  # the audio itself failed — let the caller handle it
+    metadata = {'text_hash':digest(text), 'audio_sha256':hashlib.sha256(Path(output_path).read_bytes()).hexdigest(),
+                'boundaries':boundaries}
+    atomic_json(Path(output_path).with_suffix('.boundaries.json'), metadata)
     duration = _get_audio_duration(output_path)
-    return {'audio_path': output_path, 'subtitle_path': subtitle_path, 'duration': duration}
+    return {'audio_path': output_path, 'subtitle_path': subtitle_path, 'duration': duration, **metadata}
 
 
 async def _generate_edge_batch(jobs, concurrency=6):
@@ -75,7 +64,8 @@ async def _generate_edge_batch(jobs, concurrency=6):
     return dict(await asyncio.gather(*[_one(j) for j in jobs]))
 
 
-def generate_speech(text, output_path, voice=None, rate=None, pitch=None, engine=None, speed=1.0):
+def generate_speech(text, output_path, voice=None, rate=None, pitch=None, engine=None, speed=1.0,
+                    model=None, stability=.5, similarity_boost=.75, previous_text=None, next_text=None, seed=None):
     engine = engine or config.TTS_ENGINE
     if engine == "kokoro" and KOKORO_AVAILABLE:
         return get_kokoro_tts().generate_speech(text, output_path, voice=voice, speed=speed)
@@ -83,7 +73,9 @@ def generate_speech(text, output_path, voice=None, rate=None, pitch=None, engine
         elevenlabs = get_elevenlabs_tts()
         if not elevenlabs.available:
             raise RuntimeError("ElevenLabs API key not configured. Please set your API key in settings.")
-        return elevenlabs.generate_speech(text, output_path, voice=voice)
+        return elevenlabs.generate_speech(text, output_path, voice=voice,
+            model=model or "eleven_multilingual_v2", stability=stability, similarity_boost=similarity_boost,
+            previous_text=previous_text, next_text=next_text, seed=seed)
     return asyncio.run(_generate_speech_edge(text, output_path, voice, rate, pitch))
 
 def generate_all_audio(panels, state, voice=None, rate=None, pitch=None, engine=None, speed=1.0,

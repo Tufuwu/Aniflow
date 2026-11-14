@@ -150,12 +150,15 @@ class OpenAICompatTransport(BaseTransport):
              timeout=DEFAULT_TIMEOUT) -> str:
         # top_k and keep_alive are Ollama-only; an OpenAI-compatible server has
         # no equivalent, so they are dropped rather than guessed at.
-        urls = [_as_data_url(img) for img in (images or [])]
-        urls = [u for u in urls if u]
-        if urls:
-            content = [{"type": "text", "text": prompt}] + [
-                {"type": "image_url", "image_url": {"url": u}} for u in urls
-            ]
+        self.last_response_metadata = None
+        labeled_images = [(img,_as_data_url(img)) for img in (images or [])]
+        labeled_images = [(img,url) for img,url in labeled_images if url]
+        if labeled_images:
+            content = [{"type": "text", "text": prompt}]
+            for raw_image,url in labeled_images:
+                if isinstance(raw_image,(tuple,list)) and len(raw_image)>2 and raw_image[2]:
+                    content.append({'type':'text','text':str(raw_image[2])})
+                content.append({"type":"image_url","image_url":{"url":url}})
         else:
             content = prompt
         messages = ([{"role": "system", "content": system}] if system else []) + [
@@ -183,6 +186,9 @@ class OpenAICompatTransport(BaseTransport):
         data = self._post(f"{self.host}/v1/chat/completions", payload, self.headers, timeout)
         choices = data.get("choices") or [{}]
         message = choices[0].get("message") or {}
+        self.last_response_metadata = {'model':data.get('model'),
+            'finish_reason':choices[0].get('finish_reason'), 'usage':data.get('usage'),
+            'reasoning_content_chars':len(message.get('reasoning_content') or '')}
         content = message.get("content", "")
         if isinstance(content, list):  # some servers echo the content-part array back
             content = "".join(p.get("text", "") for p in content if isinstance(p, dict))

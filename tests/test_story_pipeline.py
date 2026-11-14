@@ -30,6 +30,9 @@ class FixtureModel:
 
     def ask(self, stage, prompt, images=None, fresh=False):
         self.seen.append((stage, images, fresh))
+        if stage == 'event_integration':
+            from integration_fixture import integration_response
+            return integration_response(prompt)
         if stage == "reconcile":
             ids=json.loads(prompt.split('按顺序附上以下来源图：',1)[1].split('。',1)[0])
             return {"panels":[{"source_panel_id":pid,"classification":"story","reason":"剧情内容"} for pid in ids]}
@@ -42,9 +45,16 @@ class FixtureModel:
             fixture = json.loads((Path(__file__).parent / "fixtures/story_acceptance.json").read_text(encoding="utf-8"))
             item = fixture["panels"][(index - 1) % 3]
             return {"characters": [{"character_id":"C001", "name":"陈默", "description":"佩戴胸牌的青年",
-                                     "aliases":[], "identity_evidence":"胸牌上写着陈默"},
-                                    {"character_id":"C002", "name":"林夏", "description":"持红伞的女孩",
-                                     "aliases":[], "identity_evidence":"对话标注姓名"}],
+                                     "aliases":[], "identity_evidence":"胸牌上写着陈默",
+                                     'identity_match':{'method':'continuous_action','basis':'开门前后持同一把伞的连续行动'},
+                                     'name_evidence':{'source_panel_id':'1','kind':'visual_text','quote':'陈默',
+                                         'attribution':{'character_id':'C001','method':'name_tag',
+                                             'basis':'姓名胸牌佩戴在该人物胸前','source_panel_ids':['1']}} if index % 3 == 1 else None},
+                                    {"character_id":"C002", "name":None, "description":"持红伞的女孩",
+                                     "aliases":[], "identity_evidence":"对话标注姓名",
+                                     'identity_match':{'method':'continuous_action','basis':'交伞后仍站在门边'}}],
+                    'visible_text':['陈默'] if index % 3 == 1 else [],
+                    'identity_clues':[],
                     "dialogue":[{"speaker_id":None,"text":item["dialogue"]}] if item["dialogue"] else [],
                     "events":[{"summary":item["event"],"character_ids":["C001"],"actions":[item["event"]],
                                "importance":item["importance"],"role":item["role"],
@@ -79,7 +89,7 @@ def setup_story(tmp_path):
 def generated(setup_story):
     store, model, panels, pipeline = setup_story
     state = pipeline.analyze(panels, None)
-    return pipeline.generate(state["revision"])
+    return pipeline.generate_verified(state["revision"])
 
 
 def test_analysis_preserves_identity_dialogue_order_and_evidence(setup_story):
@@ -118,7 +128,7 @@ def test_director_keeps_causal_prerequisites(setup_story):
 def test_all_styles_have_program_owned_provenance(setup_story, style):
     store, model, panels, pipeline = setup_story
     state = pipeline.analyze(panels, None)
-    state = pipeline.generate(state["revision"], style)
+    state = pipeline.generate_verified(state["revision"], style)
     assert state["script"]["style"] == style
     for s in state["script"]["segments"]:
         e = next(e for e in state["bible"]["events"] if e["event_id"] == s["event_id"])
@@ -166,7 +176,7 @@ def test_approved_text_is_locked_and_history_is_immutable(setup_story):
         with pytest.raises(StoryConflict, match="锁定"):
             pipeline.segment_action(segment["segment_id"], action, state["revision"], "任意新内容。")
     with pytest.raises(StoryConflict):
-        pipeline.generate(state["revision"])
+        pipeline.generate_verified(state["revision"])
     with pytest.raises(StoryConflict):
         pipeline.analyze(panels,state["revision"])
     assert store.read(old_revision)["script"]["segments"][0]["review_status"] == "pending"
@@ -252,8 +262,19 @@ def test_flask_review_end_to_end_and_evidence_access(setup_story, monkeypatch, t
     assert client.post(base+"/analyze",json={}).status_code == 422
     wait_job(client,"test",client.post(base+"/analyze",json={"revision":None}))
     state = client.get(base).get_json()
+    wait_job(client,"test",client.post(base+"/integrate",json={"revision":state["revision"]}))
+    state = client.get(base).get_json()
+    assert state['stage'] == 'integrated' and state['script'] is None
+    assert state['bible']['analysis_events'] and state['bible']['event_integration']
     wait_job(client,"test",client.post(base+"/generate",json={"revision":state["revision"]}))
     state = client.get(base).get_json()
+    assert state['script'] is None and len(state['candidates'])==2
+    assert not any(stage=='check' for stage,_,_ in model.seen)
+    wait_job(client,"test",client.post(base+'/candidates/select',json={'revision':state['revision'],'candidate_id':'K001'}))
+    state=client.get(base).get_json()
+    assert all(s['fact_check'] is None for s in state['script']['segments'])
+    wait_job(client,"test",client.post(base+'/candidates/verify_selected',json={'revision':state['revision']}))
+    state=client.get(base).get_json()
     sid = state["script"]["segments"][0]["segment_id"]
     assert client.get(base+"/evidence/1").data == Path(panels[0]["path"]).read_bytes()
     assert client.get(base+"/evidence/does-not-exist").status_code == 404
@@ -293,6 +314,33 @@ def test_bad_analysis_is_retried_without_partially_merging_characters(setup_stor
     model.ask = lambda *args, **kwargs: next(replies)
     state = pipeline.analyze(panels[:1], None)
     assert state["bible"]["characters"][0]["source_panel_ids"] == ["1"]
+
+
+def test_analysis_retries_bypass_invalid_cached_response(setup_story):
+    store, model, panels, pipeline = setup_story
+    valid = model.ask("analyze", "fixture")
+    valid["dialogue"] = [{"speaker_id": None, "text": "拉"}]
+    valid["events"][0]["evidence"] = [{"kind": "dialogue", "detail": "拉"}]
+    bad = copy.deepcopy(valid)
+    bad["events"][0]["evidence"][0]["detail"] = "手旁写有“拉”字"
+    replies, cache, attempts = iter([bad, bad, valid]), {}, []
+    original_ask = model.ask
+
+    def cached_ask(stage, prompt, images=None, fresh=False):
+        if stage != "analyze":
+            return original_ask(stage, prompt, images, fresh)
+        attempts.append((prompt, fresh))
+        if fresh or prompt not in cache:
+            cache[prompt] = next(replies)
+        return copy.deepcopy(cache[prompt])
+
+    model.ask = cached_ask
+    state = pipeline.analyze(panels[:1], None)
+    assert [fresh for _, fresh in attempts] == [False, True, True]
+    assert "手旁写有“拉”字" in attempts[1][0]
+    assert '本区域原文为 ["拉"]' in attempts[1][0]
+    assert state["bible"]["events"][0]["evidence"][0]["detail"] == "拉"
+    assert store.read()["revision"] == state["revision"]
 
 
 def test_cover_does_not_pollute_story_identity_roster(setup_story):
@@ -379,12 +427,18 @@ def test_confirmed_name_requires_an_exact_original_quote(setup_story):
     store, model, panels, pipeline = setup_story
     bible=pipeline.analyze(panels,None)['bible']
     bible['characters'][0]['name']='未知人物1'
+    bible['characters'][0]['name_status']='unknown'
     bible['panels'][0]['dialogue']=[{'speaker_id':None,'text':'用户郁欢触发任务'}]
-    model.ask=lambda *args,**kwargs:{'names':[{'character_id':'C001','name':'郁欢','source_panel_id':'1','quote':'用户郁欢触发任务'}],'relationships':[]}
+    bible['panels'][0]['identity_clues']=[{'kind':'name','character_ids':['C001'],'needs_review':True,
+                                          'quote':'用户郁欢触发任务','detail':'系统显示姓名，需核对人物对应'}]
+    claim={'character_id':'C001','name':'郁欢','source_panel_id':'1','quote':'用户郁欢触发任务',
+           'attribution':{'character_id':'C001','method':'explicit_caption','basis':'系统框明确连接当前唯一人物',
+                          'source_panel_ids':['1']}}
+    model.ask=lambda *args,**kwargs:{'names':[claim],'relationships':[]}
     bible=StoryAnalyzer(store,model).reconcile_identity(bible)
     assert bible['characters'][0]['name']=='郁欢'
     assert bible['characters'][0]['identity_evidence'][-1]['kind']=='confirmed_name'
-    model.ask=lambda *args,**kwargs:{'names':[{'character_id':'C001','name':'编造姓名','source_panel_id':'1','quote':'用户郁欢触发任务'}],'relationships':[]}
+    model.ask=lambda *args,**kwargs:{'names':[{**claim,'name':'编造姓名'}],'relationships':[]}
     with pytest.raises(StoryError,match='姓名'):
         StoryAnalyzer(store,model).reconcile_identity(bible)
 

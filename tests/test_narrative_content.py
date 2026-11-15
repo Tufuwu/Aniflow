@@ -224,10 +224,12 @@ def test_writer_receives_confirmed_identity_and_filters_verification_only_backgr
             assert 'canonical_name' in prompt and '身份对应证据' in prompt
         return result
     story[2].ask=ask
-    ScriptWriter(story[2]).write_story(state['bible'],state['plan'])
+    writer = ScriptWriter(story[2])
+    facts = writer.prepare_facts(state['bible'],state['plan'])
+    writer.write_story(state['bible'],state['plan'],facts=facts)
 
 
-def test_essential_trigger_cannot_be_hidden_in_verification_only_facts(story):
+def test_optional_digest_essential_trigger_cannot_be_hidden_in_verification_only_facts(story):
     state=generate(story)
     state['plan']['essential_event_ids']=['E2']
     original=story[2].ask
@@ -237,7 +239,7 @@ def test_essential_trigger_cannot_be_hidden_in_verification_only_facts(story):
         return result
     story[2].ask=ask
     with pytest.raises(StoryError,match='遗漏关键转折'):
-        ScriptWriter(story[2]).write_story(state['bible'],state['plan'])
+        ScriptWriter(story[2]).prepare_facts(state['bible'],state['plan'])
 
 
 def test_planner_cannot_move_reveal_before_earlier_action(story):

@@ -68,12 +68,8 @@ class StoryFixtureModel:
             return {'beats':[{'event_ids':ids,'section':'opening','title':'为何改变决定'},
                              {'event_ids':['E3','E4'],'section':'climax','title':'开门拿药'},
                              {'event_ids':['E5'],'section':'ending','title':'去找家人'}],
-                    'essential_event_ids':[],
+                    'essential_event_ids':['E2'] if self.missing_turn_once else [],
                     'milestones':{'conflict':'E1','climax':'E3','rules':None,'goal_or_stakes':None,'ending':'E5'}}
-        if stage == 'story_plan_review':
-            if self.missing_turn_once and self.direct_calls == 1:
-                return {'passed':False,'missing_event_ids':['E2'],'issues':['缺少改变主意的原因：来人送药']}
-            return {'passed':True,'missing_event_ids':[],'issues':[]}
         if stage in {'write_story','rewrite_story'}:
             return {'segments':[{'event_id':eid,'text':text} for eid,text in self.narrations.items()]}
         if stage == 'story_digest':
@@ -136,16 +132,18 @@ def test_plan_keeps_low_importance_turn_and_ignores_legacy_count_limit(story):
     assert 'E2' in state['plan']['beats'][0]['event_ids']
     assert state['plan']['objective']=='continuous_story_engagement'
     assert all('target_chars' not in b for b in state['plan']['beats'])
-    assert state['plan']['completeness_review']['passed']
+    assert state['plan']['planning_validation']['mode'] == 'program_constraints'
+    assert 'completeness_review' not in state['plan']
 
 
-def test_missing_motivation_is_replanned_instead_of_shortened(story):
+def test_declared_essential_event_missing_is_replanned_by_local_validation(story):
     store,state,model,pipeline = story
     model.missing_turn_once = True
     plan = NarrativeDirector(model).plan(state['bible'],max_events=2)
     assert model.direct_calls == 2 and 'E2' in plan['beats'][0]['event_ids']
     retries = [c for c in model.calls if c[0]=='direct']
-    assert retries[-1][3] and '来人送药' in retries[-1][1]
+    assert retries[-1][3] and '缺少关键动机' in retries[-1][1] and 'E2' in retries[-1][1]
+    assert all(c[0] == 'direct' for c in model.calls)
 
 
 def test_production_model_cannot_silently_skip_scene_planning(story):
@@ -157,19 +155,18 @@ def test_production_model_cannot_silently_skip_scene_planning(story):
         NarrativeDirector(LegacyResponse()).plan(story[1]['bible'])
 
 
-def test_plan_reviewer_cannot_report_already_selected_turn_as_missing(story):
+def test_planning_has_no_model_review_and_only_records_program_validation(story):
     model = story[2]
-    original, reviews = model.ask, []
+    original = model.ask
     def ask(stage,prompt,images=None,fresh=False):
         if stage == 'story_plan_review':
-            reviews.append((prompt,fresh))
-            if len(reviews)==1:
-                return {'passed':False,'missing_event_ids':['E2'],'issues':['没有列在essential标签']}
+            raise AssertionError('Planning must not call the removed model review')
         return original(stage,prompt,images,fresh)
     model.ask = ask
     plan = NarrativeDirector(model).plan(story[1]['bible'])
-    assert plan['completeness_review']['passed'] and model.direct_calls==1
-    assert len(reviews)==2 and reviews[-1][1] and '确定的误报' in reviews[-1][0]
+    assert model.direct_calls == 1 and [c[0] for c in model.calls] == ['direct']
+    assert plan['planning_validation']['mode'] == 'program_constraints'
+    assert 'completeness_review' not in plan
 
 
 def test_whole_story_is_composed_before_factual_checks(story):

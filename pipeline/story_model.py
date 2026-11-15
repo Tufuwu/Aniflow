@@ -37,6 +37,7 @@ WRITER_SYSTEM = """你是专业中文故事解说作者，输出可直接说给�
 只用给定证据支持的事实，不编造身份、动机、关系、因果或未来；非必要的未知细节可以省略。
 以人物目标、行动、变化和兑现组织叙事，称呼自然一致，减少无作用的外貌和姿态。
 必要背景解释当前处境并建立具体关注点，可从世界异常开场，保留原作揭示顺序。
+输入提供 opening_recap 时，全稿开头用一句话回顾与本话相关的前情，再自然转入本话；第一话或前情不可用时不补造回顾。
 长短句结合，给重要消息、反应与沉默留空间；不靠热词、夸张感叹或套话，不为顺口补造事实。
 正文不能出现“画面出现/画面响起/画面字样/旁白说/对话框写着/未标明来源”等编辑说明。
 这些取证术语只用于内部核验，叙事应直接讲发生的事。保留故事，不按时长或固定字数压缩。"""
@@ -76,6 +77,41 @@ def system_for_stage(stage):
     if stage == 'chapter_memory':
         return MEMORY_SYSTEM
     return SYSTEM
+
+
+class ResponseTruncated(StoryError):
+    """A provider length stop is incomplete, not a transient JSON failure."""
+
+
+def integration_output_policy(backend, host, model):
+    """Request capacity, not a narrative length quota. Never infer by model words."""
+    configured = getattr(config, 'STORY_INTEGRATION_MAX_OUTPUT_TOKENS', '')
+    if configured not in ('', None):
+        try:
+            capacity = int(configured)
+        except (TypeError, ValueError):
+            raise StoryError('STORY_INTEGRATION_MAX_OUTPUT_TOKENS 必须是服务商支持的正整数')
+        require(not isinstance(configured, (bool, float)) and capacity > 0,
+                'STORY_INTEGRATION_MAX_OUTPUT_TOKENS 必须是服务商支持的正整数')
+        return {'mode': 'configured_provider_maximum', 'max_tokens': capacity,
+                'source': 'STORY_INTEGRATION_MAX_OUTPUT_TOKENS'}
+    if backend == 'openai' and urlsplit(host).hostname == 'api.deepseek.com' and model in {'deepseek-flash', 'deepseek-v4-pro'}:
+        # Official Chat Completions specification, verified 2026-11-14.
+        # Omitting max_tokens selects 8K in non-thinking mode, not this maximum.
+        return {'mode': 'documented_provider_maximum', 'max_tokens': 393216,
+                'source': 'https://api-docs.deepseek.com/api/create-chat-completion/', 'verified_on': '2026-11-14'}
+    return {'mode': 'provider_default_unknown_maximum', 'max_tokens': None}
+
+
+def configured_integration_output_policy():
+    """Read-only configuration view for audits; do not construct a transport."""
+    if config.STORY_API_BASE:
+        backend, host = 'openai', config.STORY_API_BASE
+    elif getattr(config, 'USE_NINE_ROUTER', False):
+        backend, host = 'openai', getattr(config, 'NINE_ROUTER_HOST', 'http://127.0.0.1:20128')
+    else:
+        backend, host = 'ollama', config.OLLAMA_HOST
+    return integration_output_policy(backend, host, config.STORY_WRITER_MODEL)
 
 
 def activity(store, stage, event, **details):
@@ -126,11 +162,18 @@ class StoryModel:
 
     def cache_identity(self, stage):
         model,vision = self._stage_model(stage)
-        return {'model':model,
+        identity = {'model':model,
                 'backend':self.transport.kind,'host':self.transport.host,
                 'system':system_for_stage(stage),
                 'image_max_side':getattr(config,'LLM_IMAGE_MAX_SIDE',1400) if vision else None,
                 'encoder':'Narrator.jpeg85.v1' if vision else None,'request_contract':2}
+        if stage == 'event_integration':
+            identity['output_policy'] = self.output_policy(stage)
+        return identity
+
+    def output_policy(self, stage):
+        if stage == 'event_integration':
+            return integration_output_policy(self.transport.kind, self.transport.host, self.writer_model)
 
     def _stage_model(self, stage):
         vision = stage in {'analyze','reconcile','identity','shot_select','visual_review','chapter_memory_review'}
@@ -139,6 +182,7 @@ class StoryModel:
     def ask(self, stage, prompt, images=None, fresh=False):
         system = system_for_stage(stage)
         model,_ = self._stage_model(stage)
+        output_policy = self.output_policy(stage)
         image_hashes = [hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in (images or [])]
         image_labels = [('当前待分析来源：只从此图提取本次对白、可见文字与事件' if i==0 else
                          '此前来源参考图：仅核对人物连续性，禁止从此图重复提取对白、文字或事件')
@@ -150,9 +194,14 @@ class StoryModel:
                    "host": self.transport.host, "system": system, "prompt": prompt,
                    "image_hashes": image_hashes, "temperature": 0.5 if stage in {"write", "write_story", "rewrite_story"} else 0.1,
                    'image_labels':image_labels,
-                   "max_tokens": 16000 if stage in {"event_integration", "write_story", "rewrite_story", "direct", 'check'} else 6000,
+                   # The first stage and repairs request advertised capacity;
+                   # they impose no event count, word count or target length.
+                   "max_tokens": output_policy['max_tokens'] if output_policy is not None else
+                       16000 if stage in {"write_story", "rewrite_story", "direct", 'check'} else 6000,
                    "image_max_side": getattr(config, "LLM_IMAGE_MAX_SIDE", 1400),
                    "image_encoder": "Narrator.jpeg85.v1"}
+        if output_policy is not None:
+            request['output_policy'] = output_policy
         provider_options = {}
         if self.transport.kind == "openai" and urlsplit(self.transport.host).hostname == "api.deepseek.com":
             provider_options = {"response_format": {"type": "json_object"},
@@ -180,7 +229,8 @@ class StoryModel:
             if getattr(self.transport,'last_response_metadata',None):
                 record['response_metadata'] = self.transport.last_response_metadata
                 record['usage_status'] = 'reported' if record['response_metadata'].get('usage') else 'unknown'
-                require(record['response_metadata'].get('finish_reason')!='length', '模型响应被长度上限截断，核验未完成')
+                if record['response_metadata'].get('finish_reason') == 'length':
+                    raise ResponseTruncated('模型响应被长度上限截断，未完成')
             body = raw.strip()
             if body.startswith("```"):
                 body = "\n".join(body.splitlines()[1:-1])
@@ -198,7 +248,8 @@ class StoryModel:
             atomic_json(trace, record)
             activity(self.store,stage,'request_failed',trace=trace.name,usage_status=record['usage_status'],
                      metadata=record.get('response_metadata'),retry_reason=record['retry_reason'],error=str(exc))
-            raise StoryError(f"{stage} 失败：{exc}") from exc
+            error_type = ResponseTruncated if isinstance(exc, ResponseTruncated) else StoryError
+            raise error_type(f"{stage} 失败：{exc}") from exc
 
 
 def prompt_json(value):

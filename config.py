@@ -61,6 +61,9 @@ STORY_API_KEY                = os.getenv("STORY_API_KEY", "")
 STORY_VISION_MODEL           = os.getenv("STORY_VISION_MODEL", os.getenv("VISION_MODEL", "qwen2.5vl:3b"))
 STORY_WRITER_MODEL           = os.getenv("STORY_WRITER_MODEL", os.getenv("TEXT_WRITER_MODEL", "gemma3:27b"))
 STORY_CHECKER_MODEL          = os.getenv("STORY_CHECKER_MODEL", STORY_VISION_MODEL)
+# Optional advertised output capacity for another provider/model. Empty uses
+# the known official provider maximum, or its default when unknown.
+STORY_INTEGRATION_MAX_OUTPUT_TOKENS = os.getenv("STORY_INTEGRATION_MAX_OUTPUT_TOKENS", "").strip()
 AUDIO_OUTPUT_DIR             = os.path.join(OUTPUT_DIR, "audio")
 VIDEO_OUTPUT_DIR             = os.path.join(OUTPUT_DIR, "video")
 

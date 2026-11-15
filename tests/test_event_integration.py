@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 import pipeline.event_integration as integration
-from pipeline.event_integration import chapter_input, fragments_for, consume, integrate_chapter, resolve_fragment
+from pipeline.event_integration import (chapter_input, fragments_for, consume, integrate_chapter, resolve_fragment,
+                                        repair_integration_result, normalize_integration_result)
 from pipeline.story_bible import StoryBible, StoryError, StoryConflict
 from pipeline.story_model import StoryModel, validated_result
 from pipeline.story_pipeline import StoryPipeline
@@ -90,7 +91,7 @@ def test_merge_split_preserve_rules_supporting_action_order_sources_and_original
     assert analysis == before
 
 
-@pytest.mark.parametrize('change', ['missing', 'unknown_ref', 'wrong_order', 'crossed_order', 'promoted', 'invented_cause', 'facet_gap'])
+@pytest.mark.parametrize('change', ['missing', 'unknown_ref', 'wrong_order', 'crossed_order', 'promoted', 'invented_cause', 'empty_facets'])
 def test_invalid_coverage_references_order_and_uncertainty_rejected(analysis, change):
     f = fragments_for(analysis)
     raw = merged_response(analysis)
@@ -108,7 +109,7 @@ def test_invalid_coverage_references_order_and_uncertainty_rejected(analysis, ch
     elif change == 'invented_cause':
         raw['events'][0]['causes'] = [{'event_id': 'E5', 'evidence': '猜测'}]
     else:
-        raw['events'][0]['facets'].pop()
+        raw['events'][0]['facets'] = []
     with pytest.raises(StoryError):
         consume(raw, analysis, f)
 
@@ -206,6 +207,8 @@ class Model:
     def ask(self, stage, prompt, images=None, fresh=False):
         assert stage == 'event_integration' and not images
         self.calls.append((prompt, fresh))
+        if 'Event Integration Field Repair v1' in prompt:
+            raise StoryError('事件整合遗漏本话信息片段')
         raw = integration_response(prompt)
         if self.bad:
             raw['events'].pop()
@@ -230,27 +233,27 @@ def test_cache_binds_actual_input_source_version_prompt_model_and_output_contrac
     elif change == 'source_version':
         revision = 'analysis-v2'
     elif change == 'prompt':
-        monkeypatch.setattr(integration, 'INSTRUCTIONS', integration.INSTRUCTIONS.replace('v1', 'v2', 1))
+        monkeypatch.setattr(integration, 'INSTRUCTIONS', '提示词变更\n' + integration.INSTRUCTIONS)
     elif change == 'model':
         model.version = 'model-v2'
     else:
-        monkeypatch.setattr(integration, 'OUTPUT_CONTRACT', {**integration.OUTPUT_CONTRACT, 'version': 2})
+        monkeypatch.setattr(integration, 'OUTPUT_CONTRACT', {**integration.OUTPUT_CONTRACT, 'version': integration.VERSION + 1})
     integrate_chapter(store, model, changed, revision)
     assert len(model.calls) == 2 and all(p.read_bytes() == content for p, content in old.items())
     assert bible == before and integrated['analysis_events'] == bible['events']
 
 
-def test_old_reference_cache_is_not_event_integration_and_invalid_result_retries(story):
+def test_old_reference_cache_is_not_event_integration_and_missing_event_stays_pending(story):
     store, state, _, _ = story
     model = Model()
     validated_result(store, model, 'context_digest', {}, lambda: {'background': ['旧摘要'], 'characters': []})
     model.bad = True
     with pytest.raises(StoryError, match='遗漏'):
         integrate_chapter(store, model, state['bible'], 'source')
-    assert len(model.calls) == 3 and [fresh for _, fresh in model.calls] == [False, True, True]
+    assert len(model.calls) == 1 and [fresh for _, fresh in model.calls] == [False]
     model.bad = False
     result = integrate_chapter(store, model, state['bible'], 'source')
-    assert len(model.calls) == 4 and result['event_integration']['source_revision'] == 'source'
+    assert len(model.calls) == 2 and result['event_integration']['source_revision'] == 'source'
     assert store.read() == state
 
 
@@ -268,7 +271,8 @@ def test_separate_first_step_saves_no_script_keeps_old_versions_and_reuses_on_ge
     assert counts(model)['event_integration'] == 1
     assert generated['bible']['events'] == integrated['bible']['events']
     stages = [c[0] for c in model.calls]
-    assert stages.index('event_integration') < stages.index('direct') < stages.index('story_digest')
+    assert stages.index('event_integration') < stages.index('direct') < stages.index('write_story')
+    assert 'story_digest' not in stages
     assert 'context_digest' not in stages and 'analyze' not in stages and not any(c[2] for c in model.calls)
 
 
@@ -388,3 +392,172 @@ vm.runInNewContext(fs.readFileSync('static/js/story_review.js','utf8'),{
     result = subprocess.run(['node', '-e', code], input=json.dumps(saved), text=True,
                             cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
+
+
+def test_targeted_integration_repair_retains_good_rows_and_only_fills_bad_summary(analysis):
+    f = fragments_for(analysis)
+    original = merged_response(analysis)
+    broken = copy.deepcopy(original)
+    broken['events'][0]['summary'] = ''
+    preserved = copy.deepcopy(broken['events'][1:])
+    class Repair:
+        def ask(self, stage, prompt, images=None, fresh=False):
+            assert stage == 'event_integration' and not images and fresh
+            payload = json.JSONDecoder().raw_decode(prompt.split('资料：', 1)[1])[0]
+            assert len(payload['issues']) == 1 and payload['issues'][0]['path'] == '/events/0/summary'
+            return {'patches': [{'issue_id': payload['issues'][0]['issue_id'],
+                                 'value': original['events'][0]['summary']}], 'unresolved': []}
+    repaired = repair_integration_result(Repair(), broken, analysis, f)
+    assert repaired == consume(original, analysis, f)
+    assert broken['events'][1:] == preserved
+
+
+@pytest.mark.parametrize('attack', ['correct_row', 'change_sources', 'duplicate_missing'])
+def test_targeted_repair_cannot_touch_correct_events_or_change_sources(analysis, attack):
+    f = fragments_for(analysis)
+    original = merged_response(analysis)
+    broken = copy.deepcopy(original)
+    broken['events'][1]['summary'] = ''
+    patch = {'replacements': [{'index': 1, 'event': copy.deepcopy(original['events'][1])}], 'additions': []}
+    if attack == 'correct_row':
+        patch['replacements'].append({'index': 0, 'event': original['events'][0]})
+    elif attack == 'change_sources':
+        patch['replacements'][0]['event']['fragment_ids'].pop()
+    elif attack == 'duplicate_missing':
+        patch['additions'] = [original['events'][0]]
+    class Repair:
+        def ask(self, *args, **kwargs):
+            return copy.deepcopy(patch)
+    before = copy.deepcopy(broken)
+    with pytest.raises(StoryError):
+        repair_integration_result(Repair(), broken, analysis, f)
+    assert broken == before
+
+
+class NoRepairModel:
+    def ask(self, *args, **kwargs):
+        raise AssertionError('Deterministic validation must not call a model')
+
+
+def test_facet_subset_keeps_every_event_source_without_repeated_coverage_or_model_call(analysis):
+    fragments = fragments_for(analysis)
+    raw = merged_response(analysis)
+    # The setting text already expresses this rule. Its original visible-text
+    # ID remains at event level; no duplicate facet is required for that ID.
+    raw['events'][0]['facets'] = raw['events'][0]['facets'][:1]
+    before = copy.deepcopy(raw)
+    result = repair_integration_result(NoRepairModel(), raw, analysis, fragments)
+    assert result[0]['fragment_ids'] == before['events'][0]['fragment_ids']
+    assert result[0]['facets'] == before['events'][0]['facets']
+    assert {f for e in result for f in e['fragment_ids']} == {f['fragment_id'] for f in fragments}
+    assert result[0]['dialogue'] == analysis['panels'][0]['dialogue'] and raw == before
+
+
+def test_exact_reference_format_is_repaired_locally_with_audit_and_no_input_mutation(analysis):
+    fragments = fragments_for(analysis)
+    raw = merged_response(analysis)
+    raw['events'][0]['fragment_ids'].reverse()
+    raw['events'][0]['fragment_ids'].append(raw['events'][0]['fragment_ids'][0])
+    raw['events'][0]['facets'][0]['fragment_ids'] = raw['events'][0]['facets'][0]['fragment_ids'][0]
+    before = copy.deepcopy(raw)
+    audit = []
+    result = repair_integration_result(NoRepairModel(), raw, analysis, fragments, local_repairs=audit)
+    assert result == consume(merged_response(analysis), analysis, fragments)
+    assert len(audit) == 2 and {c['reason'] for c in audit} == {'exact_reference_format'}
+    assert raw == before
+    normalized, _ = normalize_integration_result(raw, fragments)
+    assert normalize_integration_result(normalized, fragments) == (normalized, [])
+
+
+@pytest.mark.parametrize('note', ['人物所处具体场景未知', '无法确认场景位置', '快看为平台水印，非剧情文字',
+                                 '画面左下角为水印', 'SPAN、ORIGINAL为品牌字样，与人物身份无关'])
+def test_legacy_uncertainty_annotation_status_is_lowered_locally_without_rewriting_text(analysis, note):
+    analysis['panels'][0]['uncertainties'] = [note]
+    fragments = fragments_for(analysis)
+    raw = merged_response(analysis)
+    facet = next(f for f in raw['events'][0]['facets'] if f['status'] == 'uncertain')
+    facet.update(text=note, role='setting', status='supported')
+    before = copy.deepcopy(raw)
+    audit = []
+    result = repair_integration_result(NoRepairModel(), raw, analysis, fragments, local_repairs=audit)
+    actual = next(f for f in result[0]['facets'] if f['text'] == note)
+    assert actual == {**facet, 'status': 'uncertain'} and result[0]['status'] == 'uncertain'
+    assert len(audit) == 1 and audit[0]['reason'] == 'source_certainty_ceiling'
+    assert raw == before and analysis['panels'][0]['uncertainties'] == [note]
+
+
+@pytest.mark.parametrize('status', ['unknown', 'uncertain', 'conflicting', 'needs_history'])
+def test_local_status_repair_preserves_source_restrictions_and_never_promotes(status, analysis):
+    analysis['events'][0]['status'] = status
+    fragments = fragments_for(analysis)
+    raw = merged_response(analysis)
+    raw['events'][0]['facets'][0]['status'] = 'supported'
+    normalized, audit = normalize_integration_result(raw, fragments)
+    assert normalized['events'][0]['facets'][0]['status'] == status
+    assert len(audit) == 1
+    for facet in raw['events'][0]['facets']:
+        facet['status'] = 'unknown'
+    normalized, audit = normalize_integration_result(raw, fragments)
+    assert all(f['status'] == 'unknown' for f in normalized['events'][0]['facets']) and audit == []
+
+
+@pytest.mark.parametrize('field', ['event', 'facet', 'cross_event', 'global_order'])
+def test_ambiguous_sources_and_global_order_fail_without_paid_guessing(analysis, field):
+    fragments = fragments_for(analysis)
+    raw = merged_response(analysis)
+    if field == 'event':
+        raw['events'][0]['fragment_ids'][0] = 'F99999'
+    elif field == 'facet':
+        raw['events'][0]['facets'][0]['fragment_ids'] = ['F99999']
+    elif field == 'cross_event':
+        raw['events'][0]['facets'][0]['fragment_ids'] = raw['events'][-1]['fragment_ids']
+    else:
+        raw['events'].reverse()
+    with pytest.raises(StoryError):
+        repair_integration_result(NoRepairModel(), raw, analysis, fragments)
+
+
+def test_missing_story_content_still_needs_model_and_model_status_error_is_repaired_locally(analysis):
+    fragments = fragments_for(analysis)
+    correct = merged_response(analysis)
+    raw = copy.deepcopy(correct)
+    raw['events'][1]['facets'] = None
+    calls = []
+    class Repair:
+        def ask(self, stage, prompt, **kwargs):
+            calls.append(stage)
+            payload = json.JSONDecoder().raw_decode(prompt.split('资料：', 1)[1])[0]
+            assert len(payload['issues']) == 1 and payload['issues'][0]['path'] == '/events/1/facets'
+            replacement = copy.deepcopy(correct['events'][1]['facets'])
+            for facet in replacement:
+                facet['status'] = 'supported'
+            return {'patches': [{'issue_id': payload['issues'][0]['issue_id'], 'value': replacement}], 'unresolved': []}
+    audit = []
+    result = repair_integration_result(Repair(), raw, analysis, fragments, local_repairs=audit)
+    assert calls == ['event_integration'] and result == consume(correct, analysis, fragments)
+    assert len(audit) == 1 and audit[0]['after'] == 'uncertain'
+
+
+def test_local_repair_audit_is_cached_and_keeps_source_revisions_and_raw_transport_trace(story):
+    store, state, _, _ = story
+    before = copy.deepcopy(state)
+    class Transport:
+        kind = 'test'
+        host = 'offline.invalid'
+        calls = []
+        def chat(self, **request):
+            self.calls.append(request)
+            raw = integration_response(request['prompt'])
+            raw['events'][0]['facets'][0]['fragment_ids'] = raw['events'][0]['facets'][0]['fragment_ids'][0]
+            return json.dumps(raw, ensure_ascii=False)
+    transport = Transport()
+    model = StoryModel(store, transport)
+    integrated = integrate_chapter(store, model, state['bible'], state['revision'])
+    audit = integrated['event_integration']['local_repairs']
+    assert len(audit) == 1 and audit[0]['reason'] == 'exact_reference_format'
+    traces = {p: p.read_bytes() for p in (store.root/'calls').glob('*.json')}
+    trace = json.loads(next(iter(traces.values())))
+    assert isinstance(json.loads(trace['response'])['events'][0]['facets'][0]['fragment_ids'], str)
+    assert integrate_chapter(store, model, integrated, state['revision']) == integrated
+    assert len(transport.calls) == 1 and state == before and store.read() == state
+    assert all(p.read_bytes() == data for p, data in traces.items())

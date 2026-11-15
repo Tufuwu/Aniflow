@@ -2,18 +2,20 @@
 from copy import deepcopy
 
 from pipeline.fact_checker import FactChecker
-from pipeline.narrative_director import NarrativeDirector
+from pipeline.narrative_director import NarrativeDirector, PLANNING_CONTRACT_VERSION
 from pipeline.script_writer import ScriptWriter
 from pipeline.story_analyzer import StoryAnalyzer
 from pipeline.story_bible import StoryConflict, StoryError
 from pipeline.semantic_grounding import grounded_units
 from pipeline.narration_review import review_ready
-from pipeline.chapter_memory import generation_context, build_memory, context_current
+from pipeline.chapter_memory import generation_context, build_memory, context_current, planning_settings
 from pipeline.story_bible import digest
 from pipeline.story_model import validated_result, require
 from pipeline.story_candidates import VARIANTS, compare_candidates, sync_selected, comparison_pool
 from pipeline.event_integration import integrate_chapter, chapter_input
 from pipeline.prompt_material import current_fact_sheet
+from pipeline.fact_material import source_material_basis
+from pipeline.opening_recap import with_opening_recap
 
 
 class StoryPipeline:
@@ -123,13 +125,17 @@ class StoryPipeline:
                     state.update(script=None,plan=None)
                     state.pop('chapter_memory',None)
             candidates = state.setdefault('candidates',[])
-            # Plans and fact digests are shared only with identical dependencies.
+            # Share the plan and deterministic source packaging, without a digest API.
+            settings = planning_settings(self.store)
             plan = validated_result(self.store,self.model,'direct',
-                {'contract':1,'bible':bible,'style':style,'max_events':max_events},
-                lambda:NarrativeDirector(self.model).plan(bible,style,max_events))
-            matching = [c for c in candidates if c['analysis_id']==bible['bible_id'] and c['plan']==plan]
+                {'contract':PLANNING_CONTRACT_VERSION,'bible':bible,'style':style,'max_events':max_events,
+                 'settings':settings},
+                lambda:NarrativeDirector(self.model,settings=settings).plan(bible,style,max_events))
+            plan = with_opening_recap(bible, plan)
+            source_basis = source_material_basis(bible, plan) if plan.get('version',0)>=5 else None
+            matching = [c for c in candidates if c['analysis_id']==bible['bible_id'] and c['plan']==plan
+                        and c['script'].get('source_material_basis')==source_basis]
             writer = ScriptWriter(self.model,self.store)
-            facts = writer.prepare_facts(bible,plan) if plan.get('version',0)>=5 else None
             for index in range(candidate_count):
                 if index < len(matching):
                     existing = next(c for c in state['candidates'] if c['candidate_id']==matching[index]['candidate_id'])
@@ -142,14 +148,14 @@ class StoryPipeline:
                 candidate = {'candidate_id':cid,'analysis_id':bible['bible_id'],
                     'source_revision':state['revision'],'variant':VARIANTS[index], 'plan':deepcopy(plan),
                     'script':{'bible_id':bible['bible_id'],'style':style,'segments':[],
-                              'fact_sheet':deepcopy(facts),'fact_sheet_basis':digest({'bible':bible,'plan':plan})},'status':'writing'}
+                              'source_material_basis':deepcopy(source_basis)},'status':'writing'}
                 if existing is None:
                     candidates.append(candidate)
                 state = self._save(state,'candidate_started:'+cid,state['revision'])
                 candidates = state['candidates'];candidate = next(c for c in candidates if c['candidate_id']==cid)
                 try:
-                    if facts is not None:
-                        drafts = writer.write_story(bible,plan,facts=facts,variant={'candidate_id':cid,'direction':VARIANTS[index]})
+                    if source_basis is not None:
+                        drafts = writer.write_story(bible,plan,variant={'candidate_id':cid,'direction':VARIANTS[index]})
                     else:
                         drafts = writer.write(bible,plan)['segments']
                     candidate['script']['segments'] = drafts
@@ -165,7 +171,8 @@ class StoryPipeline:
                 candidates = state['candidates']
                 if progress:progress(index+1,candidate_count,'已保存候选 '+cid+'；未执行原图核验')
             state['candidate_set'] = [c['candidate_id'] for c in state['candidates']
-                if c['analysis_id']==bible['bible_id'] and c['plan']==plan][:candidate_count]
+                if c['analysis_id']==bible['bible_id'] and c['plan']==plan
+                and c['script'].get('source_material_basis')==source_basis][:candidate_count]
             state['candidate_comparison'] = compare_candidates(self.model,bible,comparison_pool(state))
             if not state.get('selected_candidate_id'):
                 state['stage'] = 'pending_selection'
@@ -240,15 +247,15 @@ class StoryPipeline:
             if not context_current(self.store,state['bible']):
                 raise StoryConflict('前话资料已变化，请重新分析本话后再生成，旧版本仍保留')
             state = self._integrate(state)
-            plan = NarrativeDirector(self.model).plan(state["bible"], style, max_events)
+            plan = NarrativeDirector(self.model,settings=planning_settings(self.store)).plan(state["bible"], style, max_events)
+            plan = with_opening_recap(state['bible'], plan)
             state.update(plan=plan, script={"bible_id": state["bible"]["bible_id"],
                                            "style": style, "segments": []}, stage="writing")
             state = self._save(state, "plan", state["revision"])
             writer = ScriptWriter(self.model,self.store)
             drafts = None
             if plan.get('version',0) >= 5:
-                state['script'].update(fact_sheet=writer.prepare_facts(state['bible'],plan),
-                    fact_sheet_basis=digest({'bible':state['bible'],'plan':plan}))
+                state['script']['source_material_basis'] = source_material_basis(state['bible'], plan)
                 feedback = None
                 for attempt in range(3):
                     try:

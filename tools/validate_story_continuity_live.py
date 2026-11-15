@@ -111,7 +111,7 @@ def main():
                            'events':[e for e in old['bible']['events'] if any(str(pid) in
                                {str(p) for p in range(23,32)} for pid in e['source_panel_ids'])]}
                 save_series_notes(store,prompt_json(reference),prompt_json({'status':'unverified_reference',
-                    'characters':old['bible']['characters']}),None)
+                    'characters':old['bible']['characters']}),None,input_role='analysis_reference')
             else:
                 sources=sorted(p for p in args.source_root.iterdir() if p.name.startswith(f'{args.chapter:04d}_'))
                 if len(sources)!=1:raise ValueError('Expected exactly one source chapter directory')

@@ -20,22 +20,16 @@ def necessary_events(bible, beats):
 
 
 def text_evidence(bible, beats, facts=None):
-    """Text editors need facts and original lines once, not all visual forensics."""
-    events = necessary_events(bible,beats)
+    """Text stages see compact sources; old model sheets remain references."""
+    from pipeline.fact_material import fact_events
     if facts is not None:
-        # The independently prepared sheet is the text editor's basis. Event
-        # IDs resolve to full local evidence; raw OCR and recognition doubts
-        # belong to the later image check, not every candidate's text review.
+        # A model-written sheet is a draft, not confirmation. Keep the original
+        # event analysis available so downstream editors can check it too.
         return {'fact_sheet':fact_sheet_view(facts),
-                'events':[{'event_id':e['event_id']} for e in events]}
-    pids = {p for e in events for p in e['source_panel_ids']}
-    keys = ('event_id','order','summary','character_ids','actions','causes','source_panel_ids',
-            'kind','time','facets','status','pending_causes','internal_causes','reveal_panel_id','reveal_order')
-    return {'events':[{k:deepcopy(e[k]) for k in keys if k in e}
-            for e in events],
-            'sources':[{k:deepcopy(p[k]) for k in
-             ('source_panel_id','dialogue','visible_text','uncertainties','identity_clues') if k in p}
-             for p in bible['panels'] if p['source_panel_id'] in pids]}
+                'events':fact_events(bible, beats)}
+    # Local import avoids a module cycle; reuse the compact source view for
+    # text review, repair, comparison and memory without changing image checks.
+    return {'events': fact_events(bible, beats)}
 
 
 def current_fact_sheet(bible, plan, script):
@@ -204,7 +198,8 @@ def supplemental_context(bible, nodes=None):
     decisions = {d['context_id']: d for n in nodes for d in n.get('context_usage', [])}
     result = []
     for row in context_catalog(bible):
-        decision = decisions.get(row['context_id'], {'usage':'uncertain', 'reason':'旧稿尚无当前规划的取舍记录'})
+        decision = decisions.get(row['context_id'], {'usage':'uncertain',
+            'reason':'尚无独立资料取舍，按来源确定性和当前节点按需使用，不据此补造前情'})
         if decision['usage'] in {'supplement', 'uncertain'}:
             result.append({**row, 'selection':decision['usage'], 'reason':decision['reason']})
     return result
@@ -245,7 +240,10 @@ def editor_material(bible, plan, nodes=None, beats=None):
     history = [r for r in supplements if bible.get('prior_context', {}).get('previous_chapter')
                and not r['source']['path'].startswith('series_notes/')]
     references = [r for r in supplements if r not in history]
+    from pipeline.opening_recap import recap_view
+    recap = recap_view(plan)
     return {'plan':{**{k:deepcopy(plan[k]) for k in ('style','essential_event_ids','ending_rule') if k in plan},
+                    **({'opening_recap':recap} if recap else {}),
                     'beats':[{k:deepcopy(v) for k,v in {**planned.get(b['event_id'],{}),**b}.items()
                               if k in beat_keys} for b in beats]},
             'characters':characters, 'identity_availability':compact_identity(bible, beats),

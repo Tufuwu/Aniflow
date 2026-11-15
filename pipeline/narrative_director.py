@@ -1,17 +1,21 @@
 """Chapter-level story planning: motivation, change and payoff determine length."""
+from copy import deepcopy
 from pipeline.story_model import array, prompt_json, require
-from pipeline.story_bible import StoryError
+from pipeline.story_bible import StoryError, digest
 from pipeline.story_context import context_ids, source_ids
-from pipeline.character_identity import identity_context
-from pipeline.chapter_memory import prompt_context
-from pipeline.prompt_material import character_index
+from pipeline.planning_material import planning_material, planning_json
 
 STYLES = {"faithful": "忠实叙事", "payoff": "爽点解说", "suspense": "高悬念"}
+PLANNING_CONTRACT_VERSION = 4  # Director-only compact input; stored evidence is unchanged.
 
 
 class NarrativeDirector:
-    def __init__(self, model=None):
+    def __init__(self, model=None, settings=None):
         self.model = model
+        self.settings = deepcopy(settings)
+        if settings is not None:
+            require(isinstance(settings,dict) and all(isinstance(settings.get(k),str)
+                    for k in ('revision','background','characters')), '规划设定格式无效')
 
     def plan(self, bible, style="faithful", max_events=None):
         require(style in STYLES, "不支持的解说风格")
@@ -39,17 +43,20 @@ class NarrativeDirector:
                 "ending_rule": "用本话已发生的下一步目标或未解决风险收束"}
 
     def _model_plan(self, bible, events, style):
-        facts = [{k:e.get(k, []) for k in ("event_id", "summary", "character_ids", "actions", "dialogue",
-                                           "importance", "role", "causes", "source_panel_ids",
-                                           "kind", "time", "facets", "status", "pending_causes", "internal_causes",
-                                           "reveal_panel_id", "reveal_order")} for e in events]
-        prompt = f"""Narrative Director v5。为连续观看组织整话故事，风格 {STYLES[style]}。
+        material = planning_material(bible, self.settings)
+        prompt = f"""Narrative Director v7。为连续观看组织整话故事，风格 {STYLES[style]}。
 没有目标时长，没有固定段数、事件上限或字数配额。只删没有新信息的重复，不删动机、转折和结果。
-整话证据事件（按原作顺序）：{prompt_json(facts)}
-生成前背景、主要人物资料及上一话大体剧情：{prompt_json(prompt_context(bible))}
+规划输入省略本地取证编号及空列表，来源按event_id回查；省略的列表按空处理。actions与facets动作完全一致时只保留facets；未知及不确定状态仍按原值理解。
+整话证据事件（按原作顺序）：{planning_json(material['events'])}
+作品世界背景与主要人物设定：{planning_json(material['settings'])}
+上述设定用于理解作品和规划叙事，不是上一话剧情或本话新事件；不能据此新增事件、因果、能力或人物归属。
+内部知道主角姓名、性别、职业和关系，不等于本话已经揭晓或已对应某个C编号；与本话证据冲突时保留待核，不覆盖原分析。
+未在本话揭示的身份、关系及后续线索不得提前进入节点标题、关注点或兑现，不为设定里的未来信息补造事件ID。
+上一话剧情与已固定版本的历史资料：{planning_json(material['history'])}
 历史用于理解当前选择，不机械重讲；用户参考资料须原图核对。historical 事件不能当作本话新剧情。
-人物档案及关系：{prompt_json({'characters':character_index(bible.get('characters',[])),'relationships':bible.get('relationships',[])})}
-逐事件身份可用位置：{prompt_json(identity_context(bible,[{'event_id':e['event_id']} for e in events]))}
+人物档案及关系：{planning_json(material['characters'])}
+逐事件身份可用位置：{planning_json(material['identity_positions'])}
+身份表no_confirmed_reveals表示尚无已确认的姓名/关系揭示记录，不确认人物归属；仍保留人物档案中的未知及待核状态。
 先理解整合事件中的人物目标、阻碍、改变决定的具体消息/条件、行动和兑现，再选择讲述重点、组织 beats 与承接。
 整合事件是与后续事实整理共用的本话基础；kind/time 区分当前动作、设定、回忆与历史说明，不把它们全当当前行动。
 facets/status/pending_causes 保留必要设定、未知及待补历史，不能为连贯升级；不另压成背景或人物摘要附送。
@@ -103,45 +110,15 @@ facets/status/pending_causes 保留必要设定、未知及待补历史，不能
                 require(isinstance(essential,list) and all(isinstance(eid,str) and eid in by_id for eid in essential), "关键转折引用无效")
                 mandatory = set(essential) | {eid for eid in milestones.values() if eid}
                 if modern:
-                    require(mandatory <= seen, "缺少关键动机、转折、规则或结果")
+                    require(mandatory <= seen, "缺少关键动机、转折、规则或结果：" + prompt_json(sorted(mandatory - seen)))
                     ranges = [(min(by_id[e]['order'] for e in s['event_ids']),
                                max(by_id[e]['order'] for e in s['event_ids'])) for s in specs]
                     require(all(a[1] < b[0] for a,b in zip(ranges,ranges[1:])),
                             '叙事节点不能颠倒或交错原作事件及信息揭示顺序')
-                    audit_prompt = """Story Plan Review v2。独立检查故事链完整性，不评价时长或段数。
-仅依据整话事件检查：目标→阻碍→改变决定的触发条件→行动→结果是否讲通。
-同时检查进入故事必需的背景、背景带来的具体关注点及后续行动承接，允许背景开场及有作用的长背景、氛围和情绪停顿。
-不能为了吸引力隐藏原作已经明确的信息或提前泄露身份；不要求固定结构或几秒进入冲突。
-重点寻找被遗漏的态度变化原因、交换条件、物资线索、选择规则与结果；不要把可省略的表情当关键事件。
-已在任一 beat.event_ids 内的事件已经进入规划，绝不能列入 missing_event_ids。
-不在 essential_event_ids 标签里但已在 beats 内，不是剧情遗漏；不能仅因标签不够多判失败。
-原作没有显示的开枪者、因果或清理结果不是可补造的缺失事件；规划保持未知或不做断言即可。
-只阻止实际遗漏、歪曲或前后矛盾，不要求把全部表情、装备和每个细节列为必需事件。
-返回 {"passed":true,"missing_event_ids":[],"issues":[]}。passed=false 时列真实缺失事件ID及具体问题。
-资料：""" + prompt_json({"events":facts,"plan":raw,"already_planned_event_ids":sorted(seen)})
-                    correction = ''
-                    for audit_attempt in range(2):
-                        audit = self.model.ask('story_plan_review',audit_prompt+correction,
-                                               fresh=attempt > 0 or audit_attempt > 0)
-                        require(type(audit.get('passed')) is bool and isinstance(audit.get('missing_event_ids'),list)
-                                and isinstance(audit.get('issues'),list),'剧情完整性复核格式无效')
-                        require(all(isinstance(eid,str) and eid in by_id for eid in audit['missing_event_ids']),
-                                '完整性复核引用未知事件')
-                        false_missing = set(audit['missing_event_ids']) & seen
-                        if not false_missing:
-                            break
-                        correction = '\n上次复核有确定的误报：'+prompt_json(sorted(false_missing))+' 已在 beats.event_ids 内。请重新核对规划正文，不以 essential 标签或来源未说明的结果为缺口。上次复核：'+prompt_json(audit)
-                    require(type(audit.get("passed")) is bool and isinstance(audit.get("missing_event_ids"),list)
-                            and isinstance(audit.get("issues"),list), "剧情完整性复核格式无效")
-                    require(all(eid in by_id for eid in audit["missing_event_ids"]), "完整性复核引用未知事件")
-                    require(not (set(audit['missing_event_ids']) & seen),'完整性复核仍把已规划事件误报为缺失')
-                    require(audit["passed"] and not audit["missing_event_ids"] and not audit["issues"],
-                            "剧情链缺口："+prompt_json(audit))
                 else:
                     for eid in mandatory - seen:
                         specs.append({"event_ids":[eid]})
                     specs.sort(key=lambda spec: min(by_id[eid]["order"] for eid in spec["event_ids"]))
-                    audit = None
                 break
             except StoryError as exc:
                 if attempt == 2:
@@ -170,5 +147,8 @@ facets/status/pending_causes 保留必要设定、未知及待补历史，不能
                   "ending_rule":"兑现本话目标，用已有的下一步目标或未解决风险收束"}
         if modern:
             result.update(version=5, objective="continuous_story_engagement", essential_event_ids=essential,
-                          completeness_review=audit)
+                          planning_validation={'version':PLANNING_CONTRACT_VERSION, 'mode':'program_constraints'})
+        if self.settings:
+            result['settings_basis'] = {'revision':self.settings['revision'],
+                'hash':digest({k:self.settings[k] for k in ('background','characters')})}
         return result

@@ -4,10 +4,13 @@ from pipeline.story_model import prompt_json, require, text, validated_result
 from pipeline.story_bible import StoryError
 from pipeline.narrative_director import STYLES
 from pipeline.narration_review import repeat_candidates, information_issues, content_issues, review_basis
-from pipeline.character_identity import identity_context, premature_name_issues
+from pipeline.character_identity import premature_name_issues
 from pipeline.semantic_grounding import grounded_units
-from pipeline.prompt_material import (script_text, character_index, necessary_events, revision_feedback,
-                                     text_evidence, context_catalog, bind_context_usage,
+from pipeline.fact_material import fact_material, writing_material, FACT_CONTRACT_VERSION
+from pipeline.input_compaction import compact_json
+from pipeline.opening_recap import with_opening_recap
+from pipeline.prompt_material import (script_text, revision_feedback,
+                                     text_evidence, bind_context_usage,
                                      editor_material, fact_sheet_view)
 
 
@@ -39,6 +42,9 @@ available_by_node_end 只是本节点末尾的可用上界，不能自动用于�
 不依靠网络热词、夸张感叹、空泛提问和套话吸引观众；不能为顺口补造心理、主体、结果或因果，不能丢转折触发与兑现。
 不以句长、感叹号数量、外貌词次数代替口语自然度判断。
 prior_context 是生成前提供的背景、主要人物资料及上一话摘要；沿用有证据的历史连续性，不机械复述上一话。
+plan.opening_recap 存在时，只在 anchor_event_id 对应的全稿首段，第一句简要回顾与本话相关的上一话内容，随后自然转入本话。
+回顾仅从 opening_recap.event_ids 对应事件及上一话摘要中取有据内容，保留其确定性；不复述整话、不另加段落，后续段落不再重复开场回顾。
+回顾是历史，不当作本话新发生，不为过渡补造时间、因果或人物关系；没有 opening_recap 时不写填充前情。
 series_notes 属于参考线索，不能代替原图归属与事实核验；历史事实只作必要补充，不升级为本话新发生，也不凭摘要补因果。
 '''
 
@@ -66,6 +72,8 @@ class ScriptWriter:
         self.store = store or getattr(model,"store",None)
 
     def write_segment(self, bible, plan, beat, previous="", fresh=False, feedback=None, original_text=None, facts=None):
+        plan = with_opening_recap(bible, plan)
+        beat = next((b for b in plan['beats'] if b['event_id'] == beat['event_id']), beat)
         event = next(e for e in bible["events"] if e["event_id"] == beat["event_id"])
         prompt = f"""Script Writer v2。生成适合口播的中文故事解说，风格：{STYLES[plan['style']]}。
 {STYLE_RULES[plan['style']]} 当前段落职能：{beat['section']}。篇幅由必要的剧情推进决定，没有目标字数或时长。
@@ -103,7 +111,10 @@ class ScriptWriter:
 
     def _distill_facts(self, bible, plan, feedback=None, fresh=False):
         """Compose all beats together before independent factual checks."""
-        digest_prompt = '''Story Digest v2。按当前规划将取证记录整理为共用事实简表，不写正式口播。
+        material = fact_material(bible, plan)
+        digest_prompt = '''Story Digest v3。按当前规划将取证记录整理为共用事实简表，不写正式口播。
+输入省略本地定位编号、完全重复的动作/同源对白证据副本及空列表，省略列表按空处理，事件来源由程序按event_id回查。
+identity_availability为no_confirmed_reveals表示没有已确认的姓名/关系揭示，仍须保留人物未知状态；节点标题、关注点与兑现是规划意图，不是新增事实，事实和确定性以events原文为准。
 本话整合事件是共同基础；按当前规划整理世界设定、环境异常、危险限制、人物行动及转折，不另写重复背景或人物摘要。
 保留整合事件 kind/time/facets/status/pending_causes 的原作时间、揭示位置、未知与待补历史，不能把说明或回忆改写为当前动作。
 保留背景对当前选择的作用、转折触发、行动与兑现，保持原作时间、因果和身份揭晓顺序；未知保持未知。
@@ -117,16 +128,19 @@ defer 只能在不改变原作时间、因果和揭示顺序的前提下使用�
 每个 plan.beats 对应且仅对应一个 node，锚点与顺序必须相同。
 facts.event_ids 只能来自当前节点 event_ids 或 context_event_ids。所有 essential_event_ids 必须有对应事实。
 每条事实应有可核对的事件依据，不把关系猜测或未知身份写成事实。
-context_catalog 是已有跨话记忆或用户参考的来源索引，不是本话额外事实。按当前规划逐条决定用途，
+'''
+        if material['context_catalog']:
+            digest_prompt += '''context_catalog 是已有跨话记忆或用户参考的来源索引，不是本话额外事实。按当前规划逐条决定用途，
 在相关 node 的 context_usage 中各记录一次 {context_id,usage:"supplement|covered|irrelevant|uncertain",reason}。
 supplement 仅用于简表缺少且影响理解当前选择、限制或因果的历史规则、人物状态、已确认关系或未完成目标。
 covered 必须说明已由哪些事实涵盖，且来源章节、事件、版本与原图哈希一致；换个摘要仍是重复，不能作为 supplement。
 同一事件可能含多条事实，不能仅因事件已引用就丢掉尚缺的必要信息。来源不足以判重时用 uncertain，不猜测、不静默丢弃。
 irrelevant 说明为何与本规划理解无关。用户参考、模型推测、未知关系与未揭晓身份不升级为确认事实。
 本话事实已涵盖的内容无需补充；第一话无跨话历史时前情为空，不生成填充前情。
-资料：'''+prompt_json({'plan':plan,'events':necessary_events(bible,plan['beats']),'characters':character_index(bible['characters']),
-                         'identity_availability':identity_context(bible,plan['beats']),
-                         'context_catalog':context_catalog(bible)})
+'''
+        else:
+            digest_prompt += 'context_catalog为空，本次没有可补充资料，不生成填充前情或context_usage。\n'
+        digest_prompt += '资料：'+compact_json(material)
         if feedback:
             digest_prompt += '\n上一轮需修正的问题（仅据原文修正，不补造）：'+prompt_json(revision_feedback(feedback))
         distilled = self.model.ask('story_digest',digest_prompt,fresh=fresh)
@@ -165,13 +179,22 @@ irrelevant 说明为何与本规划理解无关。用户参考、模型推测、
         if self.store is None:
             return compute()
         return validated_result(self.store,self.model,'story_digest',
-            {'contract':3,'bible':bible,'plan':plan},compute)
+            {'contract':FACT_CONTRACT_VERSION,'bible':bible,'plan':plan},compute)
 
     def write_story(self, bible, plan, feedback=None, fresh=False, facts=None, variant=None):
-        nodes = facts if facts is not None else self.prepare_facts(bible,plan)
+        plan = with_opening_recap(bible, plan)
         skeleton = {'segments':[{'event_id':b['event_id'],'text':'在这里填写本节点的连贯口播'} for b in plan['beats']]}
-        spoken_nodes = fact_sheet_view(nodes,spoken=True)
-        prompt = """Story Writer v2。为完整章节一次写出连贯、吸引人继续听的中文解说。
+        if facts is None:
+            material = writing_material(bible, plan)
+        else:
+            material = {**writing_material(bible, plan), 'nodes': fact_sheet_view(facts, spoken=True)}
+        prompt = """Story Writer v3。为完整章节一次写出连贯、吸引人继续听的中文解说。
+所有分析、规划及旧整理稿都是待核材料，经过模型处理不等于内容正确。
+在本次写作中完成必要事实取舍、相邻事件归并和口语表达；不把全部原事件都当作必须逐项朗读的清单。
+events是剧情依据，节点title/viewer_question/payoff/reason只是组织意图；与原事件或未知状态冲突时以原事件为准。
+essential_event_ids中的必要动机、触发和结果须在正文实际表达，不能只靠来源ID覆盖。
+identity_availability为no_confirmed_reveals表示尚无确认揭示，不确认人物归属。
+有旧nodes整理稿时可参考其内容，但须对照events的具体证据与未知状态，不能因模型曾整理或确认就采信。
 篇幅由讲清故事决定，没有目标时长、固定字数或段数配额。每个规划节点对应一个段落，不能漏节点。
 这里的节点是 plan.beats，不是原始 events。一个节点内可有多个来源事件，不能为每个原始事件另写一段。
 输出的 event_id 只能使用下面结构中的节点锚点，并保持节点顺序。只填 text，不增加、拆分或删除输出对象。
@@ -189,10 +212,12 @@ irrelevant 说明为何与本规划理解无关。用户参考、模型推测、
 返回 {"segments":[{"event_id":"节点的 event_id","text":"可直接配音的段落"}]}，覆盖全部节点，顺序一致。
 identity_availability 保留逐节点揭晓限制，available_by_node_end 不是节点开头即可使用；同节点也须先揭晓后使用。
 prior_context 仅为必要且非重复的跨话前情，首话无前情时为空；reference_context 为按需参考，两者不重复本话简表。
+有 plan.opening_recap 时，首段第一句简要回顾与本话相关的上一话内容，随后自然转入本话；只用所列历史事件和摘要的有据内容，保留确定性。
+回顾只占一句，放在原首段，不新增段落，不复述整话，不把历史当作本话新发生，不为过渡补造因果；没有 opening_recap 时直接进入本话。
 uncertain 和 unverified_reference 不能作为确认事实；不得扩展本话范围。
 候选可改变口语表达与组织方式，不能改变事实、时间、因果和揭晓顺序。不靠热词、夸张、空泛提问或套话补足吸引力。
-必须严格填写的输出结构："""+prompt_json(skeleton)+"\n叙事依据：" + prompt_json({
-            **editor_material(bible,plan,nodes),"style":STYLES[plan['style']],"nodes":spoken_nodes})
+必须严格填写的输出结构："""+prompt_json(skeleton)+"\n叙事依据：" + compact_json({
+            **material,"style":STYLES[plan['style']]})
         if feedback:
             prompt += "\n须修正的全稿问题："+prompt_json(revision_feedback(feedback))
         if variant:
@@ -215,10 +240,13 @@ uncertain 和 unverified_reference 不能作为确认事实；不得扩展本话
 
     def review_story(self, bible, plan, segments, feedback=None, facts=None):
         candidates = repeat_candidates(segments)
-        prompt = """Narration Review v4。通读全稿，检查故事推进、口头讲述与事实范围，不评价长度或要求压缩。
-有 fact_sheet 时，它是当前规划已整理的事实依据；events 仅为回查本地原证据的索引，不能因ID存在就判内容已表达。
+        prompt = """Narration Review v5。通读全稿，检查故事推进、口头讲述与事实范围，不评价长度或要求压缩。
+对照原事件分析检查正文取舍、动机、触发与结果，不能因事件ID存在就认为已讲清。
+有fact_sheet时也只作待核整理稿，须与events的原有证据及未知状态对照；模型整理或确认不等于正确。
 事实简表仍可能识别有误，未知及未揭晓限制不得升级；需要更多依据时定向指出事件和疑点，原图事实由选中稿的严格核验处理。
 prior_context 是非重复前情，reference_context 是按需参考；uncertain 与 unverified_reference 不得升级为确认事实，也不能扩大本话范围。
+有 plan.opening_recap 时，在 opening 项检查全稿是否以一句有据的上一话回顾开头、随后自然转入本话；遗漏或展开多句时定向修改首段，后文重复回顾时指出实际重复节点。
+回顾不得把历史当作本话新发生，不得为衔接编造因果或升级确定性；没有 opening_recap 时不要求填充前情。
 本环节没有提供原图，不能声称看见气泡指向、构图或人物动作；无法确认的疑点指向来源，留给严格逐句原图核验。
 已经有原图核验通过的句子，不得仅凭对画面的猜测再次判错；仍可阻止文本本身明确存在的主线缺失、重复、矛盾或分析腔。
 检查动机和转折是否被讲清、行动是否跳跃、信息是否重复、称呼是否前后一致、结尾是否兑现已有目标。
@@ -260,7 +288,7 @@ passed/issues 都须引用正文和事件依据；缺失内容可引用附近正
 只有原作没有相关场面时才可 not_applicable，并说明原因；opening/references/ending 不能跳过。
 opening 不机械计时或要求固定开场顺序；turns 核对实际转折的原态度、触发信息、决定、行动与兑现。
 emotion 检查反应、哭喊、安慰或有作用的沉默是否有空间；ending 检查已有结果兑现与真正的新目标，避免重复收尾。
-资料："""+prompt_json({**editor_material(bible,plan,facts,segments),"script":script_text(segments),
+资料："""+compact_json({**editor_material(bible,with_opening_recap(bible,plan),facts,segments),"script":script_text(segments),
                        **text_evidence(bible,segments,facts)})
         prompt += '\nrepeat_candidates：'+prompt_json(candidates)
         if feedback:
@@ -295,7 +323,16 @@ emotion 检查反应、哭喊、安慰或有作用的沉默是否有空间；end
         require(targets, '返修意见缺少具体节点，不能无目标地重写正确内容')
         require(not any(s.get('review_status')=='approved' for s in segments if s['event_id'] in targets),
                 '已审核文案已锁定，不能定向覆盖')
-        prompt = '''Story Revision v3。你是中文口播编辑，直接修改下面的当前整稿，解决具体审核问题。
+        from copy import deepcopy
+        writing_plan = with_opening_recap(bible, plan)
+        scoped = deepcopy(segments)
+        if writing_plan.get('opening_recap'):
+            opening = writing_plan['beats'][0]
+            for segment in scoped:
+                if segment['event_id'] == opening['event_id'] and segment['event_id'] in targets:
+                    segment.update({k:deepcopy(opening[k]) for k in
+                                    ('event_ids','context_event_ids','source_panel_ids')})
+        prompt = '''Story Revision v4。你是中文口播编辑，直接修改下面的当前整稿，解决具体审核问题。
 当前稿件已经组织成叙事节点。保留节点锚点及顺序，不另按原始事件拆段，不从取证记录重新写一份。
 把读图说明改为自然叙述：删除“画面/旁白说/字样/对话框”等编辑口吻，保留其有依据的情节内容。
 用稳定自然的称呼串联同一人物；减少外貌姿态、颜色、脚步、拟声及装备清单。必要的安静场景可以保留。
@@ -305,31 +342,31 @@ emotion 检查反应、哭喊、安慰或有作用的沉默是否有空间；end
 审核建议也可能要求无依据补全：这种建议不要照做，保持原稿有依据的说法。
 只修改 revision_event_ids 中的节点，其他节点逐字保留。不能为消除重复而删掉后段真正的新目标。
 返回 {"segments":[{"event_id":"原节点锚点","text":"修订后可直接配音的正文"}]}，可只返回需修改的节点。
-资料：'''+prompt_json({'current_script':[{'event_id':s['event_id'],'text':s['text']} for s in segments],
+资料：'''+compact_json({'current_script':[{'event_id':s['event_id'],'text':s['text']} for s in segments],
                        'review_feedback':revision_feedback(feedback),'revision_event_ids':sorted(targets),
-                       **editor_material(bible,plan,facts,segments),
-                       **text_evidence(bible,[s for s in segments if s['event_id'] in targets],facts)}) + NARRATIVE_RULES
+                       **editor_material(bible,writing_plan,facts,scoped),
+                       **text_evidence(bible,[s for s in scoped if s['event_id'] in targets],facts)}) + NARRATIVE_RULES
         raw = self.model.ask('rewrite_story',prompt,fresh=True)
         rows = raw.get('segments')
         require(isinstance(rows,list) and rows and all(isinstance(r,dict) and r.get('event_id') in
                 {s['event_id'] for s in segments} for r in rows),'整稿返修锚点或顺序无效')
         require(len({r['event_id'] for r in rows})==len(rows) and targets <= {r['event_id'] for r in rows}, '整稿返修漏节点或重复节点')
-        from copy import deepcopy
         result = []
-        for old in segments:
+        for old, scope in zip(segments, scoped):
             row = next((r for r in rows if r['event_id']==old['event_id']),old)
             if old['event_id'] not in targets:
                 require(row['text']==old['text'],'定向返修不能改写未被指出问题的段落')
             narration = text(row.get('text'),'返修稿')
             require(len(narration)<=10000 and any('\u4e00'<=c<='\u9fff' for c in narration),'返修稿文字无效')
-            result.append(deepcopy(old) if narration==old['text'] else
-                          {**deepcopy(old),'text':narration,'fact_check':None,'review_status':'pending'})
+            result.append(deepcopy(old) if narration==old['text'] and scope==old else
+                          {**scope,'text':narration,'fact_check':None,'review_status':'pending'})
             check = result[-1].get('fact_check') or {}
             if (check.get('grounding') or {}).get('status')=='mapped' and not grounded_units(bible,result[-1]):
                 result[-1]['fact_check'] = None
         return result
 
     def write(self, bible, plan):
+        plan = with_opening_recap(bible, plan)
         segments = []
         for beat in plan["beats"]:
             segments.append(self.write_segment(bible, plan, beat,

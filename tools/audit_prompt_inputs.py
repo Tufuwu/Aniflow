@@ -12,6 +12,7 @@ from pipeline.prompt_material import current_fact_sheet
 from pipeline.script_writer import ScriptWriter
 from pipeline.story_bible import StoryBible
 from pipeline.story_model import prompt_json, WRITER_SYSTEM, REVIEW_SYSTEM, SYSTEM
+from pipeline.input_compaction import compact_json
 
 
 class Captured(BaseException):
@@ -48,7 +49,9 @@ def inventory(request):
                   'image_panel_ids':'附图顺序的来源ID：', 'sentences':'待核对句子：'}
         data = {key:json_after(prompt,label) for key,label in labels.items()}
         extras = {}; system = SYSTEM
-    fields = {key:len(prompt_json(value)) for key,value in {**data,**extras}.items()}
+    serializer = compact_json if stage in {'write_story','script_review'} else prompt_json
+    fields = {key:len(serializer(value)) for key,value in data.items()}
+    fields.update({key:len(prompt_json(value)) for key,value in extras.items()})
     # Same explicit source labels as StoryModel.ask for these verification
     # images. Image bytes/base64 and transport JSON are not text/token counts.
     labels = [f'来源 source_panel_id={p.source_panel_id}。返回这个来源ID，不能用附图序号代替。'
@@ -77,7 +80,7 @@ def audit(root, historical_digest=None):
     state = store.read()
     bible, plan, script = state['bible'], state['plan'], state['script']
     facts = current_fact_sheet(bible,plan,script)
-    basis = 'current_plan_bound_fact_sheet' if facts else 'no_current_fact_sheet'
+    basis = 'current_plan_bound_fact_sheet' if facts is not None else 'program_sources'
     if facts is None and historical_digest:
         record = json.loads(Path(historical_digest).read_text(encoding='utf-8'))
         require_plan = json_after(record['request']['prompt'], '资料：')['plan']
@@ -90,8 +93,7 @@ def audit(root, historical_digest=None):
               'source_revision':state['revision'], 'fact_sheet_basis':basis,
               'model_calls':0, 'tts_calls':0, 'project_writes':0}
     result['writing'] = capture(model,lambda:writer.write_story(bible,plan,facts=facts,
-        variant={'direction':'只读统计：沿用原作事实、时间、因果和揭晓顺序'})) if facts else {
-            'status':'not_measured; no valid fact sheet, would require a model digest'}
+        variant={'direction':'只读统计：沿用原作事实、时间、因果和揭晓顺序'}))
     result['whole_review'] = capture(model,lambda:writer.review_story(bible,plan,script['segments'],facts=facts))
     if basis.startswith('historical_'):
         result['legacy_review_without_fact_sheet'] = capture(model,

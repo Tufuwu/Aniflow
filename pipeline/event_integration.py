@@ -5,22 +5,32 @@ the reconstruction to them; titles, keywords and similarity never resolve IDs.
 """
 from copy import deepcopy
 
+import pipeline.integration_repair as field_repair
 from pipeline.story_bible import StoryError, digest
-from pipeline.story_model import array, prompt_json, require, text, validated_result
+from pipeline.story_model import array, require, text, validated_result, ResponseTruncated
+from pipeline.integration_material import INPUT_VIEW_VERSION, compact_json, model_material
+from pipeline.integration_repair import (REPAIR_VERSION, IntegrationRepairUnresolved,
+                                         field_issues, repair_prompt, apply_field_patch)
 
-VERSION = 1
+VERSION = 3
 KINDS = {'current_action', 'world_rule', 'recollection', 'historical_explanation', 'unresolved', 'non_story'}
 STATUSES = {'supported', 'uncertain', 'unknown', 'conflicting', 'needs_history'}
 ROLES = {'premise', 'goal', 'obstacle', 'choice', 'trigger', 'action', 'reaction', 'result', 'setting', 'unknown'}
 OUTPUT_CONTRACT = {'version': VERSION, 'kinds': sorted(KINDS), 'statuses': sorted(STATUSES),
                    'roles': sorted(ROLES), 'coverage': 'every_fragment', 'links': 'explicit_ids_only',
+                   'facet_coverage': 'subset_of_event', 'local_repairs': 'exact_refs_and_conservative_status_v1',
+                   'repair': {'version': REPAIR_VERSION, 'scope': 'issue_id_to_field_only'},
                    'events': {'summary': 'nonempty_string', 'fragment_ids': 'ordered_nonempty_unique_ids',
                               'kind': 'enum', 'time': {'original_time': 'nonempty_string', 'status': 'enum'},
                               'facets': [{'role': 'enum', 'text': 'nonempty_string',
                                           'fragment_ids': 'ordered_nonempty_unique_ids', 'status': 'enum'}]}}
-INSTRUCTIONS = '''本话信息整合与事件还原 v1。输入是本次完整图片分析，不是背景或人物摘要；不重新看图。
+INSTRUCTIONS = '''本话信息整合与事件还原 v3。输入完整保留本话图片分析的剧情信息，不是背景或人物摘要；不重新看图。
 仅使用本话已有信息，禁止引入其他章节、未来或外部参考。需要历史才能理解的内容保留 needs_history。
-extracted_text 是未核验OCR提示，不能据此新增剧情；使用分析后的对白、可见文字、事件和已有来源关联。
+片段表 columns 为 [id,kind,source,status,content]，按原作揭示顺序列出。kind=event 的 source 是原分析事件ID，其余是图片来源ID。
+所有剧情正文仅在片段表出现一次：event保留摘要、动作、证据和已有因果；dialogue/visible_text/scene/uncertainties 等保留原有提取内容。
+事件正文没有 dialogue 时，按其 source_panel_ids 读取对应图片的 dialogue 片段；若两处对白存在差异，会同时保留，不擅自确定说话人。
+人物索引沿用已有姓名状态、待确认称呼及揭晓位置，不因字段有值就确认身份。身份疑点继续保留，不能扩展背景或关系。
+路径、哈希、裁切映射和重复识别历史留在后台，不是缺失剧情；不需要生成这些字段或来源报告。
 尽可能理解并串联零散片段，整理一个或多个清楚连贯的事件；同一连续过程可合并动作、对白、反应和结果。
 时间、场景、行动目标或局势明显变化时可拆分；一个原片段含多个过程时可在多个事件引用同一 fragment_id。
 允许语义归并和自然承接，不逐句照抄；不补造身份、心理、因果、行动结果，先后不等于因果。
@@ -40,6 +50,7 @@ summary 是连贯的剧情梳理，不是正式口播；不加吸引观众的套
 "text":"已有前提、行动、反应、结果、必要设定或未知限制", "fragment_ids":["F00001"],
 "status":"supported|uncertain|unknown|conflicting|needs_history"}]}]}。
 每个事件至少一个 facet；只填已有环节，不为凑齐链条补造。facets 的引用必须属于该事件，不能把疑点标成 supported。
+事件层保留全部组成片段；facet只引用其文字实际依据的片段，无需在facet层重复覆盖全部片段，不为覆盖水印、空白、构图或后台说明另造剧情环节。
 资料：'''
 
 
@@ -120,19 +131,50 @@ def fragments_for(analysis):
     return [{**r, 'fragment_id': f'F{i+1:05d}'} for i, r in enumerate(rows)]
 
 
-def consume(raw, analysis, fragments):
-    """Validate coverage, uncertainty and order; inherit all evidence in code."""
+def validate_integration_sources(raw, analysis, fragments):
+    """Shared source/order boundary, independent of repairable content fields."""
     require(isinstance(raw, dict), '事件整合必须是JSON对象')
     rows = array(raw.get('events'), '整合events')
     require(rows, '整合事件不能为空')
     by_id = {f['fragment_id']: f for f in fragments}
     positions = {f['fragment_id']: i for i, f in enumerate(fragments)}
-    original = {e['event_id']: e for e in analysis['events']}
     excluded = {p['source_panel_id'] for p in analysis['panels'] if p.get('panel_type', 'story') != 'story'}
     excluded.update(p['source_panel_id'] for p in analysis.get('boundary_review', {}).get('panels', [])
                     if p.get('classification') == 'non_story')
     excluded.update(pid for e in analysis['events'] if e.get('narrative_eligible') is False for pid in e['source_panel_ids'])
-    used, events, anchors = set(), [], set()
+    used, previous = set(), None
+    for row in rows:
+        require(isinstance(row, dict), '整合事件格式无效')
+        require(not ({'event_id', 'source_panel_ids', 'causes', 'character_ids', 'dialogue'} & row.keys()),
+                '整合来源和因果必须由程序继承')
+        value = row.get('fragment_ids')
+        require(isinstance(value, list) and value and all(isinstance(x, str) and x in by_id for x in value)
+                and len(value) == len(set(value)), '事件整合片段引用无效')
+        require(value == sorted(value, key=positions.get), '事件整合片段顺序无效')
+        indexes = {positions[f] for f in value}
+        if previous is not None:
+            require(min(previous) <= min(indexes), '整合事件颠倒揭示顺序')
+            left, right = previous - indexes, indexes - previous
+            require(not left or not right or max(left) < min(right), '整合事件交错揭示顺序')
+        previous = indexes
+        used.update(value)
+        pids = {p for f in value for p in by_id[f]['source_panel_ids']}
+        require(not (pids & excluded) or pids <= excluded, '不能跨越已核对的剧情与非剧情边界合并事件')
+        facets = row.get('facets')
+        for facet in facets if isinstance(facets, list) else []:
+            if isinstance(facet, dict) and facet.get('fragment_ids'):
+                fids = facet['fragment_ids']
+                require(isinstance(fids, list) and all(isinstance(f, str) and f in value for f in fids),
+                        '事件组成的片段引用无效，不能猜测对应关系')
+    require(used == set(by_id), '事件整合遗漏本话信息片段，需要调整事件范围')
+    return rows, by_id, positions, excluded
+
+
+def consume(raw, analysis, fragments):
+    """Validate coverage, uncertainty and order; inherit all evidence in code."""
+    rows, by_id, positions, excluded = validate_integration_sources(raw, analysis, fragments)
+    original = {e['event_id']: e for e in analysis['events']}
+    events, anchors = [], set()
 
     def refs(value, allowed):
         require(isinstance(value, list) and value and all(isinstance(x, str) and x in allowed for x in value)
@@ -140,34 +182,23 @@ def consume(raw, analysis, fragments):
         require(value == sorted(value, key=positions.get), '事件整合片段顺序无效')
         return value
 
-    previous = None
     for row in rows:
-        require(isinstance(row, dict), '整合事件格式无效')
-        require(not ({'event_id', 'source_panel_ids', 'causes', 'character_ids', 'dialogue'} & row.keys()),
-                '整合来源和因果必须由程序继承')
-        ids = refs(row.get('fragment_ids'), by_id)
-        indexes = {positions[f] for f in ids}
-        if previous is not None:
-            require(min(previous) <= min(indexes), '整合事件颠倒揭示顺序')
-            left, right = previous - indexes, indexes - previous
-            require(not left or not right or max(left) < min(right), '整合事件交错揭示顺序')
-        previous = indexes
-        used.update(ids)
+        ids = row['fragment_ids']
         kind = row.get('kind')
-        require(kind in KINDS, '整合事件类型无效')
+        require(isinstance(kind, str) and kind in KINDS, '整合事件类型无效')
         when = row.get('time')
-        require(isinstance(when, dict) and when.get('status') in STATUSES, '原作时间状态无效')
+        require(isinstance(when, dict) and isinstance(when.get('status'), str)
+                and when['status'] in STATUSES, '原作时间状态无效')
         text(when.get('original_time'), '原作时间或未知')
         facets = array(row.get('facets'), '事件组成')
         require(facets, '事件组成不能为空')
         for facet in facets:
-            require(isinstance(facet, dict) and facet.get('role') in ROLES
-                    and facet.get('status') in STATUSES, '事件组成角色或状态无效')
+            require(isinstance(facet, dict) and isinstance(facet.get('role'), str) and facet['role'] in ROLES
+                    and isinstance(facet.get('status'), str) and facet['status'] in STATUSES, '事件组成角色或状态无效')
             text(facet.get('text'), '事件组成文字')
             fids = refs(facet.get('fragment_ids'), set(ids))
             require(facet['status'] != 'supported' or all(by_id[f]['status'] == 'supported' for f in fids),
                     '不确定来源不能升级为确认事实')
-        require(set(ids) <= {f for part in facets for f in part['fragment_ids']}, '事件组成漏掉片段')
         origins = list(dict.fromkeys(by_id[f]['source_event_id'] for f in ids if by_id[f]['source_event_id']))
         # Keep an original anchor where possible. Split siblings receive fresh IDs.
         anchor = next((eid for eid in origins if eid not in anchors), f'I{len(events)+1:05d}')
@@ -176,7 +207,6 @@ def consume(raw, analysis, fragments):
         pids = {p for f in ids for p in by_id[f]['source_panel_ids']}
         sources = [p['source_panel_id'] for p in analysis['panels'] if p['source_panel_id'] in pids]
         contributors = [original[eid] for eid in origins]
-        require(not (pids & excluded) or pids <= excluded, '不能跨越已核对的剧情与非剧情边界合并事件')
         non_story = pids <= excluded
         require(kind != 'non_story' or non_story, '事件整合不能自行排除本话剧情')
         uncertain = any(by_id[f]['status'] != 'supported' for f in ids) or any(p['status'] != 'supported' for p in facets)
@@ -198,7 +228,6 @@ def consume(raw, analysis, fragments):
             'narrative_eligible': not non_story})
         if not events[-1]['narrative_eligible']:
             events[-1]['exclusion_reason'] = '；'.join(e.get('exclusion_reason', '原分析明确非剧情') for e in contributors) or '来源为非剧情内容'
-    require(used == set(by_id), '事件整合遗漏本话信息片段')
     # Preserve explicit causes only. A split makes a raw-event target ambiguous;
     # keep the original reference pending instead of guessing the destination.
     for e in events:
@@ -243,31 +272,143 @@ def resolve_fragment(bible, fragment):
     return deepcopy(value)
 
 
+def normalize_integration_result(raw, fragments):
+    """Fix exact reference syntax and lower certainty, never infer story content.
+
+    Unknown IDs and cross-event references stay invalid. Source uncertainty is
+    retained even for annotations in a mixed legacy uncertainties bucket; this
+    routine cannot decide their meaning or certify the model's prose.
+    """
+    candidate = deepcopy(raw)
+    require(isinstance(candidate, dict), '整合修正需要已有JSON事件响应')
+    by_id = {f['fragment_id']: f for f in fragments}
+    positions = {f['fragment_id']: i for i, f in enumerate(fragments)}
+    changes = []
+
+    def replace(obj, key, value, path, reason):
+        if obj.get(key) != value:
+            changes.append({'path': path, 'before': deepcopy(obj.get(key)),
+                            'after': deepcopy(value), 'reason': reason})
+            obj[key] = value
+
+    def refs(obj, allowed, path):
+        value = obj.get('fragment_ids')
+        if isinstance(value, str) and value in allowed:
+            value = [value]
+        if (isinstance(value, list) and value
+                and all(isinstance(f, str) and f in allowed for f in value)):
+            replace(obj, 'fragment_ids', sorted(set(value), key=positions.get), path, 'exact_reference_format')
+
+    for index, row in enumerate(array(candidate.get('events'), '整合events')):
+        if not isinstance(row, dict):
+            continue
+        prefix = f'events/{index}'
+        refs(row, by_id, prefix + '/fragment_ids')
+        ids = row.get('fragment_ids')
+        if not (isinstance(ids, list) and ids and all(isinstance(f, str) and f in by_id for f in ids)):
+            continue
+        facets = row.get('facets')
+        if not isinstance(facets, list):
+            continue
+        for j, facet in enumerate(facets):
+            if not isinstance(facet, dict):
+                continue
+            path = f'{prefix}/facets/{j}'
+            refs(facet, set(ids), path + '/fragment_ids')
+            fids = facet.get('fragment_ids')
+            if (facet.get('status') == 'supported' and isinstance(fids, list) and fids
+                    and all(isinstance(f, str) and f in ids for f in fids)):
+                statuses = {by_id[f]['status'] for f in fids}
+                status = next((s for s in ('conflicting', 'needs_history', 'unknown', 'uncertain') if s in statuses), None)
+                if status:
+                    replace(facet, 'status', status, path + '/status', 'source_certainty_ceiling')
+    return candidate, changes
+
+
+def repair_integration_result(model, raw, analysis, fragments, *, local_repairs=None, field_repairs=None):
+    """Apply local fixes first, then request only allowlisted invalid fields."""
+    candidate, changes = normalize_integration_result(raw, fragments)
+    journal = []
+    try:
+        _, _, _, excluded = validate_integration_sources(candidate, analysis, fragments)
+    except StoryError as exc:
+        raise IntegrationRepairUnresolved([{'path': '/events', 'status': 'requires_scope_change',
+                                            'reason': str(exc)}]) from exc
+
+    def finish():
+        result = consume(candidate, analysis, fragments)
+        if local_repairs is not None:
+            local_repairs.extend(deepcopy(changes))
+        if field_repairs is not None:
+            field_repairs.extend(deepcopy(journal))
+        return result
+
+    feedback = ''
+    for attempt in range(2):
+        try:
+            return finish()
+        except StoryError as exc:
+            issues = field_issues(candidate, OUTPUT_CONTRACT, excluded, fragments)
+            if not issues:
+                raise IntegrationRepairUnresolved([{'path': '/events', 'status': 'requires_scope_change',
+                                                    'reason': str(exc)}]) from exc
+        try:
+            prompt = repair_prompt(analysis, fragments, issues, feedback)
+            response = model.ask('event_integration', prompt, fresh=True)
+            candidate, applied, failures = apply_field_patch(candidate, issues, response,
+                normalize=lambda trial: normalize_integration_result(trial, fragments)[0])
+            journal.extend(applied)
+            candidate, normalized = normalize_integration_result(candidate, fragments)
+            changes.extend(normalized)
+            feedback = compact_json(failures) if failures else ''
+        except (ResponseTruncated, IntegrationRepairUnresolved):
+            raise
+        except StoryError as exc:
+            if attempt == 1:
+                raise
+            feedback = str(exc)
+    return finish()
+
+
+def integration_prompt(analysis, fragments):
+    return INSTRUCTIONS + compact_json(model_material(analysis, fragments))
+
+
 def integrate_chapter(store, model, bible, source_revision):
     analysis = chapter_input(bible, source_revision)
     fragments = fragments_for(analysis)
-    # Content occurs once, in the complete analysis. The additional catalog is
-    # only a lightweight path/index, not another paraphrased reference document.
-    prompt = INSTRUCTIONS + prompt_json({'analysis': analysis,
-        'fragments': [{k: v for k, v in f.items() if k != 'value'} for f in fragments]})
+    prompt = integration_prompt(analysis, fragments)
 
     def compute():
         feedback = ''
         for attempt in range(3):
             try:
                 raw = model.ask('event_integration', prompt + feedback, fresh=attempt > 0)
-                return consume(raw, analysis, fragments)
+            except ResponseTruncated:
+                raise
             except StoryError as exc:
                 if attempt == 2:
                     raise
                 feedback = '\n上次返回未通过程序校验：' + str(exc) + '。保留所有片段，只修正整合JSON。'
+                continue
+            local_repairs, field_repairs = [], []
+            events = repair_integration_result(model, raw, analysis, fragments,
+                                               local_repairs=local_repairs, field_repairs=field_repairs)
+            return {'events': events, 'local_repairs': local_repairs, 'field_repairs': field_repairs}
 
-    events = validated_result(store, model, 'event_integration',
-        {'input': analysis, 'fragments': fragments, 'prompt': prompt, 'output_contract': OUTPUT_CONTRACT}, compute)
+    integrated = validated_result(store, model, 'event_integration',
+        {'input': analysis, 'fragments': fragments, 'prompt': prompt, 'output_contract': OUTPUT_CONTRACT,
+         'input_view_version': INPUT_VIEW_VERSION,
+         'repair_prompt': field_repair.REPAIR_INSTRUCTIONS, 'repair_version': field_repair.REPAIR_VERSION}, compute)
     result = deepcopy(bible)
     result.setdefault('analysis_events', deepcopy(bible['events']))
-    result['events'] = [deepcopy(e) for e in result['analysis_events'] if e.get('historical')] + events
+    result['events'] = [deepcopy(e) for e in result['analysis_events'] if e.get('historical')] + integrated['events']
     result['event_integration'] = {'version': VERSION, 'source_revision': source_revision,
+        'input_view_version': INPUT_VIEW_VERSION,
+        'local_repairs': deepcopy(integrated['local_repairs']),
+        'field_repairs': deepcopy(integrated['field_repairs']),
+        'repair_version': field_repair.REPAIR_VERSION,
+        'repair_prompt_hash': digest(field_repair.REPAIR_INSTRUCTIONS),
         'input_hash': digest(analysis), 'prompt_hash': digest(prompt), 'output_contract_hash': digest(OUTPUT_CONTRACT),
         'model': model.cache_identity('event_integration') if hasattr(model, 'cache_identity') else {'class': type(model).__name__},
         'identity_review': deepcopy(analysis['identity_review']),

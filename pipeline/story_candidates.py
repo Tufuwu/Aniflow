@@ -1,7 +1,8 @@
 """Candidate identities and text-only comparisons; selection grants no approval."""
 from copy import deepcopy
 from pipeline.story_bible import digest
-from pipeline.story_model import prompt_json, require, text
+from pipeline.story_model import require, text
+from pipeline.input_compaction import compact_json
 from pipeline.prompt_material import (script_text, revision_feedback, editor_material,
                                      current_fact_sheet, text_evidence)
 from pipeline.narration_review import review_ready
@@ -12,9 +13,12 @@ VARIANTS = ('从当前处境和具体问题组织讲述，保留必要背景。'
 
 
 def candidate_basis(candidate):
-    return digest({'analysis_id':candidate['analysis_id'],'plan':candidate['plan'],
+    basis = {'analysis_id':candidate['analysis_id'],'plan':candidate['plan'],
                    'segments':script_text(candidate['script']['segments']),
-                   'review':candidate['script'].get('narrative_review')})
+                   'review':candidate['script'].get('narrative_review')}
+    if candidate['script'].get('source_material_basis'):
+        basis['source_material_basis'] = candidate['script']['source_material_basis']
+    return digest(basis)
 
 
 def comparison_basis(candidates):
@@ -44,13 +48,16 @@ def compare_candidates(model, bible, candidates):
     if len(eligible)<2:
         return {'status':'needs_review','basis_hash':basis,'recommended_candidate_id':None,
                 'reason':'至少需要两份当前文字复核通过的候选；保留现稿，等待有目标的处理'}
-    shared = {}
+    shared, material_ids = {}, {}
     for candidate in eligible:
-        plan = candidate['plan']; key = digest(plan)
+        plan = candidate['plan']
+        facts = current_fact_sheet(bible,plan,candidate['script'])
+        key = digest({'plan':plan,'source_basis':candidate['script'].get('source_material_basis'), 'facts':facts})
+        material_ids[candidate['candidate_id']] = key
         if key not in shared:
-            facts = current_fact_sheet(bible,plan,candidate['script'])
             shared[key] = {**editor_material(bible,plan,facts), **text_evidence(bible,plan['beats'],facts)}
-    prompt = '''Candidate Comparison v1。比较当前候选的必要背景、具体关注点、人物辨认、转折触发、口语、情绪空间、重复与兑现。
+    prompt = '''Candidate Comparison v2。比较当前候选的必要背景、具体关注点、人物辨认、转折触发、口语、情绪空间、重复与兑现。
+所有分析与fact_sheet都是待核材料，模型整理或确认不等于正确，不能把来源覆盖当作正文已讲清。
 引用每份候选的原句，分别说明优点、问题和事实风险，比较后给出推荐理由。没有合适稿时推荐 null，保持待审。
 不能以篇幅短、句子短或感叹号多代替吸引力判断。候选只能调整表达与背景组织，不能改变原作时间、因果、事实及身份揭晓顺序。
 这是文字推荐，不是原图事实核验或人工审核。没有原图时不得臆测画面。不要重写任何正文。
@@ -58,7 +65,7 @@ def compare_candidates(model, bible, candidates):
 "strengths":"具体优点","problems":"具体问题或无","fact_risks":"事实风险或仍待原图核验"}],
 "recommended_candidate_id":null,"reason":"比较这些引用与证据后的推荐/待审理由"}。
 各候选按 material_id 共用依据，不能因参考资料存在就要求全部写入正文，未知与揭晓限制仍然有效。
-资料：'''+prompt_json({'candidates':[{'candidate_id':c['candidate_id'],'material_id':digest(c['plan']),
+资料：'''+compact_json({'candidates':[{'candidate_id':c['candidate_id'],'material_id':material_ids[c['candidate_id']],
              'script':script_text(c['script']['segments']),
              'review':revision_feedback(c['script'].get('narrative_review'))} for c in eligible],
              'shared_material':shared})

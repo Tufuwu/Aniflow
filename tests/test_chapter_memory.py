@@ -228,12 +228,16 @@ def test_current_fact_check_receives_prior_original_name_proof(tmp_path):
     assert len(calls[0][1])==2
 
 
-def test_saved_reference_is_not_default_input_after_current_chapter_integration(story):
+def test_current_saved_settings_enter_planning_once_without_repeating_in_other_stages(story):
     store,state,model,pipeline=story
     save_series_notes(store,'海雾会切断渡口。','渡口的人暂未确认姓名。',None)
     saved=generate(story)
-    for stage in ('direct','story_digest','write_story','script_review'):
-        assert '海雾会切断渡口' not in next(prompt for s,prompt,_,_ in model.calls if s==stage)
+    planning = next(prompt for s,prompt,_,_ in model.calls if s=='direct')
+    assert planning.count('海雾会切断渡口') == 1
+    assert all(stage != 'story_digest' for stage,_,_,_ in model.calls)
+    for stage in ('direct','write_story','script_review'):
+        if stage != 'direct':
+            assert '海雾会切断渡口' not in next(prompt for s,prompt,_,_ in model.calls if s==stage)
     writer=ScriptWriter(model)
     writer.revise_story(saved['bible'],saved['plan'],saved['script']['segments'],{'issues':[{'event_id':'E1','detail':'模拟称呼核对'}]})
     assert '海雾会切断渡口' not in model.calls[-1][1]

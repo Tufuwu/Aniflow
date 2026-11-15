@@ -10,6 +10,7 @@ from pipeline.prompt_material import (context_catalog, supplemental_context, bin
 from pipeline.script_writer import ScriptWriter
 from pipeline.story_bible import StoryError
 from pipeline.fact_checker import FactChecker
+from pipeline.fact_material import SOURCE_MATERIAL_VERSION
 from test_engagement_flow import story
 from test_candidate_reuse import candidate_model, counts
 
@@ -53,18 +54,19 @@ def test_same_chapter_paraphrase_is_not_sent_again_or_as_character_forensics(sto
         'name_claims':[], 'label_claims':[]}]
     story[0].save(state, 'fixture_characters', state['revision'])
     saved = story[3].generate(story[0].read()['revision'])
-    assert counts(story[2])['story_digest'] == 1
+    assert counts(story[2])['story_digest'] == 0
     for stage,prompt,_,_ in story[2].calls:
         if stage in {'write_story','script_review'}:
             info = payload(prompt, '叙事依据：' if stage == 'write_story' else '资料：')
             assert info['prior_context'] == []
             assert info['reference_context'] == []
-            assert info['nodes' if stage == 'write_story' else 'fact_sheet'] == fact_sheet_view(
-                saved['candidates'][0]['script']['fact_sheet'],spoken=stage == 'write_story')
+            assert 'fact_sheet' not in info
+            assert {e['event_id'] for e in info['events']} == {'E1','E2','E3','E4','E5'}
             assert not any(s in prompt for s in ('DUPLICATE_PARAPHRASED_WORLD_AND_ACTION',
-                                                 'FORENSICS_HISTORY','FORENSICS_DESCRIPTION'))
+                                                 'FORENSICS_HISTORY'))
     assert saved['bible']['prior_context']['background'][0]['text'] == 'DUPLICATE_PARAPHRASED_WORLD_AND_ACTION'
-    assert saved['candidates'][0]['script']['fact_sheet'][0]['context_usage'] == []
+    assert saved['candidates'][0]['script']['source_material_basis']['version'] == SOURCE_MATERIAL_VERSION
+    assert 'fact_sheet' not in saved['candidates'][0]['script']
     comparison = next(p for stage,p,_,_ in story[2].calls if stage == 'candidate_compare')
     assert len(payload(comparison,'资料：')['shared_material']) == 1
     assert 'DUPLICATE_PARAPHRASED_WORLD_AND_ACTION' not in comparison and 'FORENSICS_HISTORY' not in comparison
@@ -75,8 +77,8 @@ def test_first_chapter_without_history_keeps_context_empty(story):
     saved = story[3].generate(story[1]['revision'])
     script = saved['candidates'][0]['script']
     assert context_catalog(saved['bible']) == []
-    assert editor_material(saved['bible'],saved['candidates'][0]['plan'],script['fact_sheet'])['prior_context'] == []
-    assert 'context_usage' not in script['fact_sheet'][0]
+    assert editor_material(saved['bible'],saved['candidates'][0]['plan'])['prior_context'] == []
+    assert 'fact_sheet' not in script
 
 
 def test_first_chapter_external_reference_does_not_become_a_fabricated_recap(story):
@@ -181,7 +183,7 @@ def test_text_projection_keeps_reveal_order_and_never_changes_strict_check(story
     checker = FactChecker(story[0],story[2])
     checker.check(bible,segment)
     first = story[2].calls[-1]
-    material = editor_material(bible,plan,script['fact_sheet'])
+    material = editor_material(bible,plan,script.get('fact_sheet'))
     assert material['identity_availability'][0]['not_yet_revealed'][0]['reveal_order'] == 4
     assert '完整原图归属取证' not in json.dumps(material,ensure_ascii=False)
     checker.check(bible,segment)
@@ -222,7 +224,7 @@ def test_changed_plan_uses_new_candidate_group_and_preserves_previous_versions(s
     changed = story[3].generate(first['revision'],max_events=3)
     assert changed['candidates'][:2] == kept
     assert changed['candidate_set'] == ['K003','K004']
-    assert counts(story[2])['story_digest'] == 2
+    assert counts(story[2])['story_digest'] == 0
     assert changed['candidates'][2]['plan']['beats'][0]['title'] != kept[0]['plan']['beats'][0]['title']
     assert story[0].read(first['revision']) == first
 

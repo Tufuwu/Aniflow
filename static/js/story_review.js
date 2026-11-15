@@ -61,7 +61,7 @@ window.StoryReview = (() => {
     const notes = noteDrafts.get(project) || state.series_notes || {};
     host.innerHTML = `<section class="story-review">
       <h2>剧情理解与中文解说 · 第${chapter}话</h2>
-      <p>一次图片分析 → 本话信息整合与事件还原 → 叙事规划与事实整理 → 多候选写稿与文字比较 → 人选定 → 严格原图核验 → 人工审核。</p>
+      <p>一次图片分析 → 本话信息整合与事件还原 → 叙事规划 → 多候选写稿与文字比较 → 人选定 → 严格原图核验 → 人工审核。</p>
       ${state.input?.kind === 'raw_slices' ? `<p class="story-warning">已保留 ${state.input.count} 张原始切片。请先在 AniFlow 完成拼接、分镜检查，或导入确认后的完整分镜。</p>` : ''}
       ${state.input?.kind === 'detected_panels' ? '<p class="story-warning">来源区域已保留整话内容，可先预分析和写草稿。请检查阅读顺序、截断和遗漏；确认分镜后才能审核锁定。</p>' : ''}
       ${viewRevision ? '<p class="story-warning">正在查看历史版本，只读。返回最新版本后可继续审核。</p>' : ''}

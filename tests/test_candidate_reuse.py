@@ -55,16 +55,16 @@ def candidate_model(story):
 def counts(model):return Counter(c[0] for c in model.calls)
 
 
-def test_two_candidates_share_plan_facts_without_any_images_and_supplement_only_third(story):
+def test_two_candidates_share_program_sources_without_digest_or_images_and_supplement_only_third(story):
     store,state,model,pipeline=story;candidate_model(story)
     first=pipeline.generate(state['revision'])
-    assert counts(model)=={'event_integration':1,'direct':1,'story_plan_review':1,'story_digest':1,'write_story':2,'script_review':2,'candidate_compare':1}
+    assert counts(model)=={'event_integration':1,'direct':1,'write_story':2,'script_review':2,'candidate_compare':1}
     assert first['script'] is None and first['stage']=='pending_selection'
     assert len(first['candidates'])==2
     before=copy.deepcopy(first['candidates'])
     third=pipeline.generate(first['revision'],candidate_count=3)
     assert third['candidates'][:2]==before and len(third['candidates'])==3
-    assert counts(model)['write_story']==3 and counts(model)['story_digest']==1 and counts(model)['direct']==1
+    assert counts(model)['write_story']==3 and counts(model)['story_digest']==0 and counts(model)['direct']==1
     assert all(not images for _,_,images,_ in model.calls)
     assert store.read(first['revision'])==first
 
@@ -349,7 +349,7 @@ def test_long_reference_is_distilled_once_keeps_unknowns_and_originals_local(tmp
     prepare_reference_brief(store,model,changed);assert len(calls)==2
 
 
-def test_text_review_uses_fact_table_and_dialogue_once_without_visual_forensics(story):
+def test_text_review_uses_program_sources_without_claiming_a_model_fact_table(story):
     store,state,model,pipeline=story;candidate_model(story)
     bible=state['bible']
     for e in bible['events']:
@@ -359,10 +359,10 @@ def test_text_review_uses_fact_table_and_dialogue_once_without_visual_forensics(
     saved=pipeline.generate(state['revision'])
     review_prompt=next(p for stage,p,_,_ in model.calls if stage=='script_review')
     info=data(review_prompt)
-    assert info['fact_sheet']==saved['candidates'][0]['script']['fact_sheet'] and 'sources' not in info
+    assert 'fact_sheet' not in info and 'sources' not in info
+    assert 'fact_sheet' not in saved['candidates'][0]['script']
     fallback=text_evidence(bible,saved['candidates'][0]['plan']['beats'])
-    assert fallback['sources'][0]['dialogue']==bible['panels'][0]['dialogue']
-    assert 'FULL_VISUAL_FORENSICS_SENTINEL' not in review_prompt
-    assert 'DUPLICATE_EVENT_DIALOGUE_SENTINEL' not in review_prompt
-    assert all('evidence' not in e and 'dialogue' not in e for e in info['events'])
+    assert fallback['events'][0]['dialogue']==bible['events'][0]['dialogue']
+    assert 'FULL_VISUAL_FORENSICS_SENTINEL' in review_prompt  # Unique evidence is no longer replaced by a digest.
+    assert counts(model)['story_digest']==0
     assert saved['bible']['analysis_events']==bible['events']

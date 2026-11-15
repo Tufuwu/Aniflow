@@ -21,15 +21,31 @@ def chapter_number(store):
 def series_notes(store):
     if chapter_number(store) is None:
         return {'revision':None, 'background':'', 'characters':''}
-    notes = StoryBible(store.root.parent/'series_context').read()
-    return {k:notes.get(k, '' if k!='revision' else None) for k in ('revision','background','characters')}
+    # Read-only planning/auditing must not create a series_context directory.
+    target = object.__new__(StoryBible)
+    target.root = store.root.parent/'series_context'
+    notes = target.read()
+    result = {k:notes.get(k, '' if k!='revision' else None) for k in ('revision','background','characters')}
+    if 'input_role' in notes:
+        result['input_role'] = notes['input_role']
+    return result
 
 
-def save_series_notes(store, background, characters, revision):
+def save_series_notes(store, background, characters, revision, *, input_role='series_settings'):
     require(chapter_number(store) is not None, '当前目录不属于章节项目')
     require(all(isinstance(v,str) and len(v)<=50000 for v in (background,characters)), '背景和人物资料格式无效')
+    require(input_role in {'series_settings','analysis_reference'}, '资料用途无效')
     target = StoryBible(store.root.parent/'series_context')
-    return target.save({'background':background,'characters':characters},'update_series_context',revision)
+    return target.save({'background':background,'characters':characters,'input_role':input_role},
+                       'update_series_context',revision)
+
+
+def planning_settings(store):
+    """Current explicit settings only; never guess from old copied JSON/text."""
+    notes = series_notes(store)
+    if notes.get('input_role') != 'series_settings' or not any(notes.get(k,'').strip() for k in ('background','characters')):
+        return None
+    return {k:notes[k] for k in ('revision','background','characters')}
 
 
 def memory_basis(state):

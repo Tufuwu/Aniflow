@@ -10,8 +10,7 @@ from pipeline.narrative_director import NarrativeDirector
 from pipeline.script_writer import ScriptWriter
 from pipeline.story_bible import StoryConflict, StoryError, digest
 from pipeline.prompt_material import current_fact_sheet, text_evidence
-from pipeline.story_candidates import compare_candidates
-from test_candidate_reuse import candidate_model, counts
+from test_story_reuse import grounding_model, counts
 from test_engagement_flow import story
 
 
@@ -33,16 +32,15 @@ def forbid_digest(monkeypatch):
     monkeypatch.setattr(ScriptWriter, 'prepare_facts', fail)
 
 
-def test_default_candidate_flow_skips_digest_and_shares_raw_source_dependencies(story, monkeypatch):
+def test_single_draft_flow_skips_digest_and_preserves_source_dependencies(story, monkeypatch):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     forbid_digest(monkeypatch)
     before = copy.deepcopy(state)
     result = pipeline.generate(state['revision'])
     stages = [c[0] for c in model.calls]
-    assert stages == ['event_integration','direct','write_story','script_review',
-                      'write_story','script_review','candidate_compare']
-    for c in result['candidates']:
+    assert stages == ['event_integration','direct','write_story','script_polish']
+    for c in [result]:
         assert 'fact_sheet' not in c['script'] and 'fact_sheet_basis' not in c['script']
         assert c['script']['source_material_basis'] == source_material_basis(result['bible'], c['plan'])
         assert set(c['script']['source_material_basis']) == {'version', 'hash'}
@@ -59,12 +57,12 @@ def test_default_candidate_flow_skips_digest_and_shares_raw_source_dependencies(
 
 def test_compatible_verified_flow_keeps_review_and_original_image_checks(story, monkeypatch):
     _, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     forbid_digest(monkeypatch)
     result = pipeline.generate_verified(state['revision'])
     stages = [c[0] for c in model.calls]
-    assert 'story_digest' not in stages and 'script_review' in stages and 'check' in stages
-    assert stages.index('write_story') < stages.index('script_review') < stages.index('check')
+    assert 'story_digest' not in stages and 'script_polish' in stages and 'check' in stages
+    assert stages.index('write_story') < stages.index('script_polish') < stages.index('check')
     assert any(images for stage, _, images, _ in model.calls if stage == 'check')
     assert 'fact_sheet' not in result['script']
     assert result['script']['source_material_basis'] == source_material_basis(result['bible'], result['plan'])
@@ -141,47 +139,50 @@ def test_legacy_model_sheet_is_a_reference_and_is_paired_with_original_events(st
     assert 'MODEL_MAY_BE_WRONG_SENTINEL' in model.calls[-1][1]
     assert data['events'][0]['summary'] == bible['events'][0]['summary']
     assert '模型处理不等于内容正确' in model.calls[-1][1]
-    writer.review_story(bible, plan, segments, facts=facts)
+    writer.polish_story(bible, plan, segments, facts=facts)
     data = payload(model.calls[-1][1], '资料：')
-    assert data['fact_sheet'][0]['facts'][0]['text'] == 'MODEL_MAY_BE_WRONG_SENTINEL'
-    assert data['events'][0]['summary'] == bible['events'][0]['summary']
+    assert set(data)=={'style','polish_options','script'}
+    assert 'MODEL_MAY_BE_WRONG_SENTINEL' not in model.calls[-1][1]
     assert all(c[0] != 'story_digest' for c in model.calls)
 
 
-def test_old_candidates_and_model_cache_stay_readable_but_are_not_reused_as_new_drafts(story):
+def test_old_candidates_and_model_cache_remain_in_history_without_active_pool(story):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     first = pipeline.generate(state['revision'])
-    plan = first['candidates'][0]['plan']; bible = first['bible']
+    plan = first['plan']; bible = first['bible']
     facts = ScriptWriter(model, store).prepare_facts(bible, plan)
-    for c in first['candidates']:
-        c['script'].pop('source_material_basis')
-        c['script'].update(fact_sheet=copy.deepcopy(facts), fact_sheet_basis=digest({'bible':bible,'plan':plan}))
+    script = copy.deepcopy(first['script'])
+    script.pop('generation_basis');script.pop('source_material_basis')
+    script.update(fact_sheet=facts, fact_sheet_basis=digest({'bible':bible,'plan':plan}))
+    first['script'] = copy.deepcopy(script)
+    first['candidates'] = [{'candidate_id':'K001','analysis_id':bible['bible_id'],'plan':plan,'script':script}]
+    first.update(candidate_set=['K001'],selected_candidate_id='K001',candidate_comparison={'reason':'old'})
     legacy = store.save(first, 'fixture_old_digest_candidates', first['revision'])
-    kept = copy.deepcopy(legacy['candidates'])
     old_cache = {p:p.read_bytes() for p in (store.root/'cache').glob('*') if p.is_file()}
     model.calls.clear()
     result = pipeline.generate(legacy['revision'])
-    assert result['candidate_set'] == ['K003','K004'] and result['candidates'][:2] == kept
+    assert not {'candidates','candidate_set','candidate_comparison','selected_candidate_id'} & result.keys()
     assert counts(model)['story_digest'] == counts(model)['direct'] == 0
-    assert counts(model)['write_story'] == 2
-    assert current_fact_sheet(bible, plan, kept[0]['script']) == facts
+    assert counts(model)['write_story'] == 1
+    assert current_fact_sheet(bible, plan, script) == facts
     assert store.read(legacy['revision']) == legacy
     assert all(p.read_bytes() == data for p, data in old_cache.items())
 
 
-def test_program_input_version_changes_candidate_group_without_replanning(story, monkeypatch):
+def test_program_input_version_regenerates_single_script_without_replanning(story, monkeypatch):
     import pipeline.fact_material as material_module
-    _, state, model, pipeline = story
-    candidate_model(story)
-    first = pipeline.generate(state['revision']); kept = copy.deepcopy(first['candidates'])
+    store, state, model, pipeline = story
+    grounding_model(story)
+    first = pipeline.generate(state['revision'])
     next_version = material_module.SOURCE_MATERIAL_VERSION + 1
     monkeypatch.setattr(material_module, 'SOURCE_MATERIAL_VERSION', next_version)
     model.calls.clear()
     second = pipeline.generate(first['revision'])
-    assert second['candidate_set'] == ['K003','K004'] and second['candidates'][:2] == kept
     assert counts(model)['direct'] == counts(model)['story_digest'] == 0
-    assert second['candidates'][2]['script']['source_material_basis']['version'] == next_version
+    assert counts(model)['write_story'] == 1
+    assert second['script']['source_material_basis']['version'] == next_version
+    assert store.read(first['revision']) == first
 
 
 def test_full_source_metadata_invalidates_basis_even_if_omitted_from_model_input(story):
@@ -194,29 +195,11 @@ def test_full_source_metadata_invalidates_basis_even_if_omitted_from_model_input
 
 def test_selected_human_lock_still_blocks_whole_generation(story):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     generated = pipeline.generate(state['revision'])
-    selected = pipeline.select(generated['revision'], 'K001')
+    selected = generated
     selected['script']['segments'][0]['review_status'] = 'approved'
     locked = store.save(selected, 'fixture_human_lock', selected['revision'])
     model.calls.clear()
     with pytest.raises(StoryConflict): pipeline.generate(locked['revision'])
     assert model.calls == [] and store.read() == locked
-
-
-def test_comparison_separates_legacy_sheet_and_raw_sources_with_same_plan(story):
-    _, state, model, pipeline = story
-    candidate_model(story)
-    result = pipeline.generate(state['revision'])
-    mixed = copy.deepcopy(result['candidates'])
-    facts = ScriptWriter(model).prepare_facts(result['bible'], mixed[0]['plan'])
-    mixed[0]['script'].pop('source_material_basis')
-    mixed[0]['script'].update(fact_sheet=facts,
-        fact_sheet_basis=digest({'bible':result['bible'],'plan':mixed[0]['plan']}))
-    model.calls.clear()
-    comparison = compare_candidates(model, result['bible'], mixed)
-    assert comparison['status'] == 'compared'
-    data = payload(model.calls[-1][1], '资料：')
-    assert len(data['shared_material']) == 2
-    assert len({c['material_id'] for c in data['candidates']}) == 2
-    assert all(c['material_id'] in data['shared_material'] for c in data['candidates'])

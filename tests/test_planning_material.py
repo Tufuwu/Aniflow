@@ -9,7 +9,7 @@ from pipeline.character_identity import identity_context
 from pipeline.narrative_director import NarrativeDirector, PLANNING_CONTRACT_VERSION
 from pipeline.planning_material import planning_material, planning_json
 from pipeline.story_model import validated_result
-from test_candidate_reuse import candidate_model, counts
+from test_story_reuse import grounding_model, counts
 from test_engagement_flow import story
 
 
@@ -154,7 +154,7 @@ def test_director_uses_compact_input_and_resolves_full_sources_without_extra_cal
 
 def test_previous_settings_contract_checkpoint_is_not_reused_or_overwritten(story):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     integrated = pipeline.integrate(state['revision'])
     bible = integrated['bible']
     legacy = NarrativeDirector(model).plan(bible)
@@ -166,10 +166,10 @@ def test_previous_settings_contract_checkpoint_is_not_reused_or_overwritten(stor
     generated = pipeline.generate(integrated['revision'])
     assert counts(model)['direct'] - before['direct'] == 1
     assert counts(model)['event_integration'] == before['event_integration']
-    assert generated['candidates'][0]['plan']['planning_validation']['version'] == PLANNING_CONTRACT_VERSION
+    assert generated['plan']['planning_validation']['version'] == PLANNING_CONTRACT_VERSION
     assert all(p.read_bytes() == data for p, data in old_files.items())
     assert validated_result(store, model, 'direct', dependencies,
                             lambda: pytest.fail('Old checkpoint must remain readable')) == legacy
     before = counts(model)
-    assert pipeline.generate(generated['revision'])['candidates'] == generated['candidates']
+    assert pipeline.generate(generated['revision'])['script'] == generated['script']
     assert counts(model)['direct'] == before['direct']

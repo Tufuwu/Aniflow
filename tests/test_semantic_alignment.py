@@ -8,14 +8,15 @@ import socket
 import pytest
 
 from pipeline.fact_checker import FactChecker
-from pipeline.narration_review import repeat_candidates, information_issues
+from pipeline.narration_review import repeat_candidates
+from test_engagement_flow import polish_payload
 from pipeline.script_writer import ScriptWriter, narration_lint
 from pipeline.semantic_grounding import make_grounding, grounded_units, measured_spans, attach_tts_boundaries
 from pipeline.shot_selector import GlobalShotOptimizer, ShotSelectorAgent, required_events, coverage_report
 from pipeline.story_bible import StoryBible, StoryError, StoryConflict, digest
 from pipeline.story_pipeline import StoryPipeline
 from pipeline.timeline_director import TimelineDirector, validate_timeline
-from test_engagement_flow import review_payload
+from test_engagement_flow import polish_payload
 
 
 @pytest.fixture(autouse=True)
@@ -182,36 +183,13 @@ def test_partial_speech_stream_failure_is_not_cached_as_success(tmp_path,monkeyp
     assert not path.with_suffix('.boundaries.json').exists()
 
 
-def test_last_round_43_character_repeat_is_detected_without_model_approval():
-    repeated='吩咐把能带的都带上，能带多少带多少，外面的盒子就不要了。男子坐在桌前应了一声“好！”。'
-    segments=[{'event_id':'A','text':'他'+repeated}, {'event_id':'B','text':'他'+repeated+'接下来去找同伴。'}]
-    candidates=repeat_candidates(segments)
-    assert candidates and repeated in candidates[0]['text']
-    issues,_=information_issues(segments,{'passed':True},candidates)
-    assert issues and issues[0]['event_id']=='B'
 
 
-def test_original_story_callback_is_kept_with_new_payoff():
-    phrase='无论风雨多大，日落之前一定要点亮灯塔。'
-    segments=[{'event_id':'A','text':phrase}, {'event_id':'B','text':phrase+'如今灯光终于照到了返航的船。'}]
-    candidates=repeat_candidates(segments)
-    assert candidates
-    raw={'repeat_assessments':[{'repeat_id':c['repeat_id'],'purpose':'payoff','reason':'承诺得到兑现',
-                               'new_information':'如今灯光终于照到了返航的船。'} for c in candidates]}
-    issues,_=information_issues(segments,raw,candidates)
-    assert not issues
 
 
-def test_semantic_repeat_with_different_wording_is_reviewed():
-    segments=[{'event_id':'A','text':'她收好燃料，准备驾船离开。'},
-              {'event_id':'B','text':'汽油已经装船，她可以出发了。'}]
-    assert not repeat_candidates(segments)
-    raw={'information_flow':[
-        {'event_id':'A','new_information':['她收好燃料，准备驾船离开。'],'repeats':[]},
-        {'event_id':'B','new_information':[],'repeats':[{'earlier_event_id':'A','purpose':'redundant',
-          'detail':'同一装船动作和出发准备，没有新变化'}]}]}
-    issues,report=information_issues(segments,raw,[])
-    assert report['status']=='reviewed' and any('语义重复' in i['detail'] for i in issues)
+
+
+
 
 
 @pytest.mark.parametrize('value',['他背对画面站着。','她背对镜头走远。','画面出现字样。'])
@@ -232,13 +210,8 @@ def test_targeted_repair_preserves_unchanged_checks_and_rechecks_changed_only(tm
     class Model:
         def __init__(self):self.checks=0;self.reviews=0
         def ask(self,stage,prompt,images=None,fresh=False):
-            if stage=='script_review':
+            if stage=='script_polish':
                 self.reviews+=1
-                data=json.JSONDecoder().raw_decode(prompt.split('资料：',1)[1])[0]
-                return {**review_payload(data['script'],['E1','E2']), 'passed':self.reviews>1,
-                        'issues':[] if self.reviews>1 else [{'event_id':'E2','detail':'删去重复铺垫'}]}
-            if stage=='rewrite_story':
-                assert 'revision_event_ids' in prompt and segment['text'] in prompt
                 return {'segments':[{'event_id':'E2','text':'他重新点亮灯塔。'}]}
             if stage=='check':
                 self.checks+=1
@@ -251,7 +224,11 @@ def test_targeted_repair_preserves_unchanged_checks_and_rechecks_changed_only(tm
     saved=store.save(source,'fixture',None)
     model=Model()
     result=StoryPipeline(store,model).revise(saved['revision'])
-    assert model.checks==1 and result['script']['segments'][0]==other
+    assert model.checks==0 and model.reviews==1
+    assert result['script']['segments'][0]==other
+    assert result['script']['segments'][1]['fact_check'] is None
+    result=StoryPipeline(store,model).verify(result['revision'])
+    assert model.checks==1 and model.reviews==1 and result['script']['segments'][0]==other
     changed=result['script']['segments'][1]
     assert changed['fact_check']['status']=='passed'
     assert grounded_units(result['bible'],changed)[0]['display_panel_ids']==['2']
@@ -269,20 +246,14 @@ def test_targeted_repair_rejects_changes_outside_feedback(mapped):
         ScriptWriter(Model()).revise_story(source['bible'], {'beats':[]}, [other,segment], {'issues':[{'event_id':'E2'}]})
 
 
-def test_new_approval_gate_requires_information_review_and_current_mapping(tmp_path,mapped):
+def test_approval_still_requires_current_fact_mapping_without_quality_judgment(tmp_path,mapped):
     source,segment,_,_=mapped
     source['plan']={'version':5,'beats':[{'event_id':'E2'}]}
-    source['script']['narrative_review']={'passed':True,'issues':[]}
-    store=StoryBible(tmp_path/'chapter')
-    state=store.save(source,'fixture',None)
-    pipeline=StoryPipeline(store,object())
-    with pytest.raises(StoryConflict,match='新增信息'):
-        pipeline.segment_action(segment['segment_id'],'approve',state['revision'])
-    state['script']['narrative_review']['information_review']={'status':'reviewed'}
-    state['script']['segments'][0]['fact_check'].pop('grounding')
-    state=store.save(state,'legacy_check',state['revision'])
+    source['script'].pop('narrative_review',None)
+    source['script']['segments'][0]['fact_check'].pop('grounding')
+    store=StoryBible(tmp_path/'chapter');state=store.save(source,'legacy_check',None)
     with pytest.raises(StoryConflict,match='来源尚未关联'):
-        pipeline.segment_action(segment['segment_id'],'approve',state['revision'])
+        StoryPipeline(store,object()).segment_action(segment['segment_id'],'approve',state['revision'])
     assert store.read()['script']['segments'][0]['review_status']=='pending'
 
 

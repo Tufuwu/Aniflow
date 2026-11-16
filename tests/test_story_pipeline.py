@@ -268,12 +268,10 @@ def test_flask_review_end_to_end_and_evidence_access(setup_story, monkeypatch, t
     assert state['bible']['analysis_events'] and state['bible']['event_integration']
     wait_job(client,"test",client.post(base+"/generate",json={"revision":state["revision"]}))
     state = client.get(base).get_json()
-    assert state['script'] is None and len(state['candidates'])==2
+    assert state['script']['segments'] and 'candidates' not in state
     assert not any(stage=='check' for stage,_,_ in model.seen)
-    wait_job(client,"test",client.post(base+'/candidates/select',json={'revision':state['revision'],'candidate_id':'K001'}))
-    state=client.get(base).get_json()
     assert all(s['fact_check'] is None for s in state['script']['segments'])
-    wait_job(client,"test",client.post(base+'/candidates/verify_selected',json={'revision':state['revision']}))
+    wait_job(client,"test",client.post(base+'/verify',json={'revision':state['revision']}))
     state=client.get(base).get_json()
     sid = state["script"]["segments"][0]["segment_id"]
     assert client.get(base+"/evidence/1").data == Path(panels[0]["path"]).read_bytes()
@@ -456,3 +454,38 @@ def test_director_causal_context_has_all_its_image_sources(setup_story):
 
 def test_chinese_quotes_do_not_create_punctuation_only_sentences():
     assert sentences('她喊：“哥！”。门开了。') == ['她喊：“哥！”。','门开了。']
+
+
+@pytest.mark.parametrize('chapter_path',['','/chapters/2'])
+def test_candidate_api_removed_and_current_verify_available(setup_story, monkeypatch, tmp_path, chapter_path):
+    _,model,panels,_=setup_story
+    monkeypatch.setattr(config,'STORY_DIR',str(tmp_path/'api'))
+    app=Flask(__name__)
+    app.register_blueprint(create_story_blueprint(lambda project:panels,lambda store:model))
+    client=app.test_client();base='/api/story/test'+chapter_path
+    for action in ('compare','select','review_candidate','verify_selected'):
+        assert client.post(base+'/candidates/'+action,json={'revision':None}).status_code==404
+    for count in (1,2,3):
+        response=client.post(base+'/generate',json={'revision':None,'candidate_count':count})
+        assert response.status_code==422 and not model.seen
+    response=client.post(base+'/verify',json={'revision':None})
+    assert response.status_code==202
+    job_id=response.get_json()['job_id']
+    for _ in range(500):
+        job=client.get(base+'/jobs/'+job_id).get_json()
+        if job['status']!='running':break
+        time.sleep(.005)
+    assert job['status']=='failed' and '请先生成稿件' in job['error']
+    assert not model.seen
+
+
+def test_cli_removes_multi_candidate_options_and_exposes_current_verify():
+    import subprocess,sys
+    root=Path(__file__).parents[1]
+    def cli(*args):
+        return subprocess.run([sys.executable,str(root/'story_app.py'),*args],cwd=root,
+                              capture_output=True,text=True,encoding='utf-8',errors='replace')
+    run=cli('run','--help');assert run.returncode==0 and '--candidate-count' not in run.stdout
+    verify=cli('verify','--help');assert verify.returncode==0 and '--chapter' in verify.stdout
+    assert cli('candidates','--project','test','--action','compare').returncode==2
+    assert cli('run','--project','test','--candidate-count','2').returncode==2

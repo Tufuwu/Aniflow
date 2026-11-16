@@ -4,7 +4,6 @@ import re
 
 from pipeline.story_bible import StoryBible, digest
 from pipeline.story_model import prompt_json, require, text, EvidenceImage
-from pipeline.narration_review import review_ready
 from pipeline.semantic_grounding import grounded_units
 from pipeline.story_context import context_ids, source_ids
 from pipeline.character_identity import identity_source_ids
@@ -62,8 +61,7 @@ def source_ready(state):
     if not all((s.get('fact_check') or {}).get('status')=='passed' for s in segments):
         return False
     if plan.get('version', 0)>=5:
-        return (review_ready(script.get('narrative_review'),state['bible'],plan,segments)
-                and all(grounded_units(state['bible'],s) for s in segments))
+        return all(grounded_units(state['bible'],s) for s in segments)
     # Legacy drafts have no structured narrative review; keep their memory pending.
     return False
 

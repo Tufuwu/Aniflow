@@ -13,6 +13,7 @@ import config
 from pipeline.story_bible import StoryBible, StoryConflict, StoryError
 from pipeline.story_model import StoryModel
 from pipeline.story_pipeline import StoryPipeline
+from pipeline.narration_polish import polish_options
 
 
 def story_store(project, chapter=1):
@@ -45,8 +46,12 @@ def create_story_blueprint(panel_provider=None, model_factory=StoryModel):
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             raise StoryError("请求必须是 JSON 对象")
+        if action == 'generate' and {'candidate_count', 'candidate_id'} & data.keys():
+            raise StoryError('已移除多候选参数，请刷新页面后生成单稿')
         if "revision" not in data:
             raise StoryError("缺少版本号，请刷新后重试")
+        if action in {'generate','revise'} and 'polish_options' in data:
+            data['polish_options'] = polish_options(data['polish_options'])
         if segment_id is not None:
             data["segment_id"] = segment_id
         store = story_store(project,chapter)
@@ -58,7 +63,7 @@ def create_story_blueprint(panel_provider=None, model_factory=StoryModel):
             raise StoryConflict("当前章节正在其他窗口处理，请等待完成") from exc
         if data["revision"] != current["revision"]:
             raise StoryConflict("内容已变化，请刷新后重试")
-        if action in {"analyze", "integrate", "generate", "revise", "prepare", "confirm_panels", "select", "verify_selected"}:
+        if action in {"analyze", "integrate", "generate", "revise", "prepare", "confirm_panels", "verify"}:
             StoryPipeline._unlocked(current)
         imported = local_inputs(project,chapter)
         if action == "approve" and imported and imported["input_kind"] != "panels":
@@ -113,17 +118,11 @@ def create_story_blueprint(panel_provider=None, model_factory=StoryModel):
                 result = pipeline.integrate(data['revision'])
             elif action == "generate":
                 result = pipeline.generate(data["revision"], data.get("style", "faithful"),
-                                           data.get("max_events"), progress, data.get("candidate_count",2))
-            elif action == 'compare':
-                result = pipeline.compare(data['revision'])
-            elif action == 'select':
-                result = pipeline.select(data['revision'],data.get('candidate_id'))
-            elif action == 'review_candidate':
-                result = pipeline.review_candidate(data['revision'],data.get('candidate_id'))
-            elif action == 'verify_selected':
-                result = pipeline.verify_selected(data['revision'])
+                                           data.get("max_events"), progress, data.get('polish_options'))
+            elif action == 'verify':
+                result = pipeline.verify(data['revision'])
             elif action == 'revise':
-                result = pipeline.revise(data['revision'])
+                result = pipeline.revise(data['revision'],data.get('polish_options'))
             elif action == 'memory':
                 result = pipeline.remember(data['revision'])
             else:
@@ -223,12 +222,10 @@ def create_story_blueprint(panel_provider=None, model_factory=StoryModel):
     def generate(project, chapter=1):
         return start(project, "generate", chapter=chapter)
 
-    @bp.post('/api/story/<project>/chapters/<int:chapter>/candidates/<action>')
-    @bp.post('/api/story/<project>/candidates/<action>')
-    def candidate_action(project, action, chapter=1):
-        if action not in {'compare','select','verify_selected','review_candidate'}:
-            raise StoryError('不支持的候选操作')
-        return start(project,action,chapter=chapter)
+    @bp.post('/api/story/<project>/chapters/<int:chapter>/verify')
+    @bp.post('/api/story/<project>/verify')
+    def verify(project, chapter=1):
+        return start(project, 'verify', chapter=chapter)
 
     @bp.post('/api/story/<project>/chapters/<int:chapter>/revise')
     @bp.post('/api/story/<project>/revise')

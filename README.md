@@ -28,7 +28,7 @@
 
 AniFlow downloads manhwa/webtoon chapters, detects and crops panels using YOLO, extracts speech-bubble text, generates AI narration, converts it to speech, and renders video clips — all through a browser-based UI.
 
-**中文剧情分析与解说审核（第一阶段）**：新增逐分镜 Story Bible、事件规划、三种中文风格、原图逐句核验、审核锁定和单段重写。可在 Review Text 使用，或运行 `python story_app.py serve` 启动独立文案审核入口。详见 [使用与验收文档](docs/story-system.md)。
+**中文剧情分析与解说审核（第一阶段）**：新增逐分镜 Story Bible、事件规划、三种中文风格、原图逐句核验、审核锁定和单段重写。可在 Review Text 使用，或运行 `python story_app.py serve` 启动独立文案审核入口。详见 [使用与验收文档](docs/story-system.md)。 当前文案流程采用单稿生成，第四阶段使用GPT Luna进行口播编剧重写，展开人物反差、旁白吐槽和配音停顿，支持完整解说篇幅、可选包袱设计与锁定原文；详见 [第四阶段配置](docs/narration-polish.md)。
 
 **剧情驱动分镜剪辑（单话验证）**：在已审核文案之上增加证据约束选镜、全局镜头优化、重复压缩、人工锁定、非破坏性裁切、实际 TTS 时间轴和 1080×1920 H.264 导出。主界面点击“剧情分镜剪辑”，或访问 `/shot-review`。详见 [剪辑工作台与验收](docs/shot-editing.md)。
 

@@ -14,7 +14,7 @@ from pipeline.semantic_grounding import grounded_units
 from pipeline.story_bible import StoryBible, StoryError
 from pipeline.story_pipeline import StoryPipeline
 from integration_fixture import integration_response
-from test_candidate_reuse import candidate_model, counts
+from test_story_reuse import grounding_model, counts
 from test_chapter_memory import MemoryModel, remembered, next_analysis, data
 
 
@@ -32,7 +32,7 @@ def offline(monkeypatch):
 
 class RecapModel(MemoryModel):
     def ask(self, stage, prompt, images=None, fresh=False):
-        if stage in {'script_review','chapter_memory','chapter_memory_review'}:
+        if stage in {'script_polish','chapter_memory','chapter_memory_review'}:
             return super().ask(stage, prompt, images, fresh)
         self.calls.append((stage,prompt,images,fresh))
         if stage == 'event_integration':
@@ -110,13 +110,13 @@ def test_unavailable_recap_restores_original_causal_context(continuation):
     assert with_opening_recap(bible,enriched) == plan
 
 
-@pytest.mark.parametrize('mode', ['candidates','verified'])
+@pytest.mark.parametrize('mode', ['single','verified'])
 def test_generation_persists_first_sentence_scope_and_preserves_previous_chapter(continuation, mode):
     first, previous, store, state, model = continuation
     pipeline = StoryPipeline(store,model)
-    candidate_model((store,state,model,pipeline))
-    saved = pipeline.generate(state['revision']) if mode == 'candidates' else pipeline.generate_verified(state['revision'])
-    drafts = saved['candidates'] if mode == 'candidates' else [saved]
+    grounding_model((store,state,model,pipeline))
+    saved = pipeline.generate(state['revision']) if mode == 'single' else pipeline.generate_verified(state['revision'])
+    drafts = [saved]
     for draft in drafts:
         segment = draft['script']['segments'][0]
         assert segment['text'] == RECAP+CURRENT
@@ -124,10 +124,10 @@ def test_generation_persists_first_sentence_scope_and_preserves_previous_chapter
         assert 'H00001_E00001' in segment['event_ids']
     assert counts(model)['story_digest'] == 0 and first.read() == previous
     assert store.read(state['revision']) == state
-    if mode == 'candidates':
+    if mode == 'single':
         writes = counts(model)['write_story']
         again = pipeline.generate(saved['revision'])
-        assert again['candidates'] == saved['candidates'] and counts(model)['write_story'] == writes
+        assert again['script'] == saved['script'] and counts(model)['write_story'] == writes
     else:
         assert grounded_units(saved['bible'],saved['script']['segments'][0])
 

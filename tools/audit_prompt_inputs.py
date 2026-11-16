@@ -11,7 +11,7 @@ from pipeline.fact_checker import FactChecker
 from pipeline.prompt_material import current_fact_sheet
 from pipeline.script_writer import ScriptWriter
 from pipeline.story_bible import StoryBible
-from pipeline.story_model import prompt_json, WRITER_SYSTEM, REVIEW_SYSTEM, SYSTEM
+from pipeline.story_model import prompt_json, WRITER_SYSTEM, SYSTEM, system_for_stage
 from pipeline.input_compaction import compact_json
 
 
@@ -35,12 +35,15 @@ def inventory(request):
         data = json_after(prompt, '叙事依据：')
         extras = {'output_skeleton':json_after(prompt, '必须严格填写的输出结构：')}
         if '\n本候选的表达任务' in prompt:
-            extras['candidate_direction'] = json_after(prompt, '本候选的表达任务（不得改事实/时间/因果/身份揭晓顺序）：')
+            # Accept historical captures as well as the current writing policy.
+            label = prompt.split('\n本候选的表达任务', 1)[1].split('：', 1)[0]
+            extras['candidate_direction'] = json_after(prompt, '\n本候选的表达任务'+label+'：')
         system = WRITER_SYSTEM
-    elif stage == 'script_review':
+    elif stage in {'script_polish','script_polish_analysis','script_review'}:
         data = json_after(prompt, '资料：')
-        extras = {'repeat_candidates':json_after(prompt, '\nrepeat_candidates：')}
-        system = REVIEW_SYSTEM
+        extras = ({'repeat_candidates':json_after(prompt, '\nrepeat_candidates：')}
+                  if '\nrepeat_candidates：' in prompt else {})
+        system = system_for_stage(stage)
     else:
         labels = {'characters':'人物：', 'prior_context':'生成前资料：',
                   'identity_availability':'identity_availability：', 'relationships':'原文已确认的关系：',
@@ -49,7 +52,7 @@ def inventory(request):
                   'image_panel_ids':'附图顺序的来源ID：', 'sentences':'待核对句子：'}
         data = {key:json_after(prompt,label) for key,label in labels.items()}
         extras = {}; system = SYSTEM
-    serializer = compact_json if stage in {'write_story','script_review'} else prompt_json
+    serializer = compact_json if stage in {'write_story','script_polish','script_review'} else prompt_json
     fields = {key:len(serializer(value)) for key,value in data.items()}
     fields.update({key:len(prompt_json(value)) for key,value in extras.items()})
     # Same explicit source labels as StoryModel.ask for these verification
@@ -91,13 +94,12 @@ def audit(root, historical_digest=None):
     model = Capture(); writer = ScriptWriter(model)
     result = {'unit':'Unicode characters, not tokens; images counted separately',
               'source_revision':state['revision'], 'fact_sheet_basis':basis,
-              'model_calls':0, 'tts_calls':0, 'project_writes':0}
-    result['writing'] = capture(model,lambda:writer.write_story(bible,plan,facts=facts,
-        variant={'direction':'只读统计：沿用原作事实、时间、因果和揭晓顺序'}))
-    result['whole_review'] = capture(model,lambda:writer.review_story(bible,plan,script['segments'],facts=facts))
+              'model_calls':0, 'tts_calls':0, 'project_writes':0, 'fourth_stage':'performance_script_rewriting'}
+    result['writing'] = capture(model,lambda:writer.write_story(bible,plan,facts=facts))
+    result['whole_review'] = capture(model,lambda:writer.polish_story(bible,plan,script['segments'],facts=facts))
     if basis.startswith('historical_'):
         result['legacy_review_without_fact_sheet'] = capture(model,
-            lambda:writer.review_story(bible,plan,script['segments']))
+            lambda:writer.polish_story(bible,plan,script['segments']))
     checker = FactChecker(store,model)
     rows = []
     for segment in script['segments']:
@@ -111,7 +113,7 @@ def audit(root, historical_digest=None):
         'prompt_chars_min':min(r['prompt_chars'] for r in rows),
         'prompt_chars_max':max(r['prompt_chars'] for r in rows),
         'attached_images_sum_with_repeated_use':sum(r['attached_images'] for r in rows)}
-    result['limits'] = ('No new digest, reference selection, prose, verification result or video was generated. '
+    result['limits'] = ('Read-only capture only; no digest, prose, polishing output, verification result or video was generated. '
                         'Unresolved legacy reference units remain labelled; no prediction of new model size, cost or quality.')
     return result
 

@@ -23,18 +23,11 @@ from pipeline.timeline_compositor import ass_text
 from pipeline.timeline_director import subtitle_chunks
 from pipeline.preview_pipeline import preview_chapter
 from pipeline.story_model import StoryModel,SYSTEM,WRITER_SYSTEM
-from pipeline.narration_review import CONTENT_ASPECTS, CONTENT_DETAILS
 
 
-def review_payload(segments, evidence_ids):
-    """A structurally complete fake review; never evidence of model quality."""
-    cite = {'event_id':segments[0]['event_id'],'text':segments[0]['text']}
-    return {'passed':True,'issues':[], 'information_flow':[
-        {'event_id':s['event_id'],'new_information':[s['text']],'repeats':[]} for s in segments],
-        'content_checks':[{'aspect':aspect,'verdict':'passed','detail':'离线模拟复核的具体判断',
-                           'assessments':{k:'模拟判断：仅测试字段约束，不证明内容质量' for k in CONTENT_DETAILS.get(aspect,())},
-                           'citations':[cite],'evidence_event_ids':evidence_ids[:1],'issues':[]}
-                          for aspect in CONTENT_ASPECTS]}
+def polish_payload(segments, evidence_ids=None):
+    """Synthetic no-op edit response; not a judgment about real quality."""
+    return {'segments':[]}
 
 
 @pytest.fixture(autouse=True)
@@ -77,9 +70,9 @@ class StoryFixtureModel:
                               zip(self.narrations.items(),[['E1','E2'],['E3','E4'],['E5']])]}
         if stage == 'write':
             return {'text':self.narrations['E1']}
-        if stage == 'script_review':
+        if stage == 'script_polish':
             data = json.JSONDecoder().raw_decode(prompt.split('资料：',1)[1])[0]
-            return review_payload(data['script'],[e['event_id'] for e in data['events']])
+            return polish_payload(data['script'])
         if stage == 'check':
             self.check_calls += 1
             parts = json.loads(prompt.split('待核对句子：',1)[1].split('\n返回',1)[0])
@@ -178,39 +171,10 @@ def test_whole_story_is_composed_before_factual_checks(story):
     assert all(s['review_status']=='pending' for s in result['script']['segments'])
 
 
-def test_story_revision_receives_current_draft_and_preserves_grounding(story):
-    model = story[2]
-    original,reviews = model.ask,[]
-    def ask(stage,prompt,images=None,fresh=False):
-        if stage=='script_review':
-            reviews.append(prompt)
-            if len(reviews)==1:
-                return {'passed':False,'blocking_issues':[{'event_id':'E1','detail':'需要改善衔接'}],'suggestions':[]}
-        return original(stage,prompt,images,fresh)
-    model.ask = ask
-    state = generate(story)
-    stages = [c[0] for c in model.calls]
-    assert stages.count('write_story')==1 and stages.count('rewrite_story')==1
-    rewrite = next(c for c in model.calls if c[0]=='rewrite_story')
-    assert model.narrations['E1'] in rewrite[1] and '需要改善衔接' in rewrite[1] and rewrite[3]
-    assert state['script']['segments'][0]['event_ids']==['E1','E2']
-    assert state['script']['narrative_review']['passed']
 
 
-def test_rejected_story_is_saved_for_review_without_approval(story):
-    model = story[2]
-    original = model.ask
-    def ask(stage,prompt,images=None,fresh=False):
-        if stage=='script_review':
-            return {'passed':False,'issues':[{'event_id':'E1','detail':'真实的主线问题'}]}
-        return original(stage,prompt,images,fresh)
-    model.ask = ask
-    with pytest.raises(StoryError,match='连贯性'):
-        generate(story)
-    saved = story[0].read()
-    assert saved['stage']=='review' and len(saved['script']['segments'])==3
-    assert not saved['script']['narrative_review']['passed']
-    assert all(s['review_status']=='pending' and s['fact_check'] is None for s in saved['script']['segments'])
+
+
 
 
 def test_writer_role_differs_from_fact_checker_and_thinking_stays_scoped(tmp_path):
@@ -276,12 +240,7 @@ def test_visual_selector_receives_actual_candidate_images(story):
     assert all(any(d.get('visual_reviewed') for d in g['decisions']) for g in groups)
 
 
-def test_reading_explanations_are_rejected_even_if_model_review_says_pass(story):
-    result = generate(story)
-    result['script']['segments'][0]['text']='一段红色对白写着：救命。是谁还没交代。'
-    review = ScriptWriter(story[2]).review_story(result['bible'],result['plan'],result['script']['segments'])
-    assert not review['passed'] and review['issues']
-    assert not narration_lint([{'event_id':'E1','text':'他听说来人带着药，终于打开了门。'}])
+
 
 
 def test_rejected_actual_crop_is_restored_and_rechecked(story):
@@ -316,12 +275,7 @@ def test_visual_review_cannot_invent_source_ids(story):
         ShotSelectorAgent(BadReviewer()).review_selected(result,library,groups[:1])
 
 
-def test_manual_edit_invalidates_previous_whole_story_review(story):
-    result = generate(story)
-    result = story[3].segment_action(result['script']['segments'][0]['segment_id'],'edit',result['revision'],
-                                    '一段红色对白写着：救命。')
-    assert not result['script']['narrative_review']['passed']
-    assert result['stage']=='review'
+
 
 
 def test_complete_detected_panel_is_never_cut_by_fixed_height():

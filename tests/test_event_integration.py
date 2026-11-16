@@ -17,7 +17,7 @@ from pipeline.chapter_memory import prompt_context
 from pipeline.prompt_material import context_catalog
 from integration_fixture import integration_response
 from test_engagement_flow import story
-from test_candidate_reuse import candidate_model, counts
+from test_story_reuse import grounding_model as candidate_model, counts
 
 
 @pytest.fixture(autouse=True)

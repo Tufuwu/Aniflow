@@ -29,16 +29,9 @@ def offline(monkeypatch):
     monkeypatch.setattr(socket,'create_connection',deny)
 
 
-def candidate_model(story):
+def grounding_model(story):
     model=story[2];original=model.ask
     def ask(stage,prompt,images=None,fresh=False):
-        if stage=='candidate_compare':
-            model.calls.append((stage,prompt,images,fresh));info=data(prompt)
-            return {'candidates':[{'candidate_id':c['candidate_id'],
-                'citations':[{'event_id':c['script'][0]['event_id'],'text':c['script'][0]['text']}],
-                'strengths':'模拟：背景支持当前选择','problems':'模拟：措辞仍需人审','fact_risks':'尚未核对原图'}
-                for c in info['candidates']], 'recommended_candidate_id':info['candidates'][0]['candidate_id'],
-                'reason':'模拟比较引用与背景用途，不证明真实吸引力'}
         result=original(stage,prompt,images,fresh)
         if stage=='check':
             events=json.JSONDecoder().raw_decode(prompt.split('\n事件：',1)[1])[0]
@@ -55,59 +48,50 @@ def candidate_model(story):
 def counts(model):return Counter(c[0] for c in model.calls)
 
 
-def test_two_candidates_share_program_sources_without_digest_or_images_and_supplement_only_third(story):
-    store,state,model,pipeline=story;candidate_model(story)
+def test_single_draft_is_written_once_and_repeated_generation_reuses_it(story):
+    store,state,model,pipeline=story;grounding_model(story)
     first=pipeline.generate(state['revision'])
-    assert counts(model)=={'event_integration':1,'direct':1,'write_story':2,'script_review':2,'candidate_compare':1}
-    assert first['script'] is None and first['stage']=='pending_selection'
-    assert len(first['candidates'])==2
-    before=copy.deepcopy(first['candidates'])
-    third=pipeline.generate(first['revision'],candidate_count=3)
-    assert third['candidates'][:2]==before and len(third['candidates'])==3
-    assert counts(model)['write_story']==3 and counts(model)['story_digest']==0 and counts(model)['direct']==1
+    assert counts(model)=={'event_integration':1,'direct':1,'write_story':1,'script_polish':1}
+    assert first['script']['segments'] and first['stage']=='review'
+    assert not {'candidates','candidate_set','candidate_comparison','selected_candidate_id'} & first.keys()
+    before=copy.deepcopy(first);calls=copy.deepcopy(model.calls)
+    assert pipeline.generate(first['revision'])==before and model.calls==calls
     assert all(not images for _,_,images,_ in model.calls)
-    assert store.read(first['revision'])==first
+    assert store.read(first['revision'])==before
 
 
-def test_only_selected_candidate_checked_checks_reused_and_selection_is_not_approval(story):
-    store,state,model,pipeline=story;candidate_model(story)
+def test_current_script_checks_reused_without_selection_or_automatic_approval(story):
+    _,state,model,pipeline=story;grounding_model(story)
     generated=pipeline.generate(state['revision'])
-    selected=pipeline.select(generated['revision'],'K002')
-    assert counts(model)['check']==0 and all(s['review_status']=='pending' for s in selected['script']['segments'])
-    verified=pipeline.verify_selected(selected['revision'])
+    assert counts(model)['check']==0 and all(s['review_status']=='pending' for s in generated['script']['segments'])
+    verified=pipeline.verify(generated['revision'])
     assert counts(model)['check']==3
     assert all(grounded_units(verified['bible'],s) for s in verified['script']['segments'])
-    assert all(s['fact_check'] is None for s in verified['candidates'][0]['script']['segments'])
-    again=pipeline.verify_selected(verified['revision'])
+    again=pipeline.verify(verified['revision'])
     assert counts(model)['check']==3
-    switched=pipeline.select(again['revision'],'K001')
-    assert switched['script']==switched['candidates'][0]['script']
-    pipeline.verify_selected(switched['revision'])
-    assert counts(model)['check']==6  # Same events and even identical text do not copy checks between candidates.
+    assert all(s['review_status']=='pending' for s in again['script']['segments'])
+    assert not any(hasattr(pipeline,name) for name in ('select','compare','review_candidate','verify_selected'))
 
 
-def test_selected_edit_invalidates_comparison_only_rechecks_changed_text_and_protects_versions(story):
-    store,state,model,pipeline=story;candidate_model(story)
+def test_edit_only_rechecks_changed_text_and_protects_versions_and_human_locks(story):
+    store,state,model,pipeline=story;grounding_model(story)
     generated=pipeline.generate(state['revision'])
-    selected=pipeline.select(generated['revision'],'K001')
-    verified=pipeline.verify_selected(selected['revision'])
-    before=copy.deepcopy(verified)
+    verified=pipeline.verify(generated['revision']);before=copy.deepcopy(verified)
     changed=pipeline.segment_action('S_E1','edit',verified['revision'],'暴雨还在下，陈默听到送药的消息后开了门。')
     assert counts(model)['check']==4
-    assert changed['candidates'][1]==before['candidates'][1]
     assert changed['script']['segments'][1:]==before['script']['segments'][1:]
-    assert changed['candidate_comparison']['status']=='needs_review'
-    assert changed['candidate_comparison']['recommended_candidate_id'] is None
     assert store.read(before['revision'])==before
+    calls=list(model.calls)
+    assert pipeline.generate(changed['revision'])==changed and model.calls==calls
     locked=pipeline.segment_action('S_E1','approve',changed['revision'])
-    with pytest.raises(StoryConflict):pipeline.select(locked['revision'],'K002')
-    with pytest.raises(StoryConflict):pipeline.generate(locked['revision'],candidate_count=3)
+    with pytest.raises(StoryConflict):pipeline.generate(locked['revision'])
+    with pytest.raises(StoryConflict):pipeline.verify(locked['revision'])
 
 
 def test_plan_dependent_digest_never_reused_for_another_plan(story):
-    store,state,model,pipeline=story;candidate_model(story)
+    store,state,model,pipeline=story;grounding_model(story)
     generated=pipeline.generate(state['revision'])
-    writer=ScriptWriter(model,store);bible=generated['bible'];plan=generated['candidates'][0]['plan']
+    writer=ScriptWriter(model,store);bible=generated['bible'];plan=generated['plan']
     writer.prepare_facts(bible,plan)
     assert counts(model)['story_digest']==1
     different=copy.deepcopy(plan);different['beats'][0]['title']='本节点背景怎样影响选择'
@@ -117,46 +101,35 @@ def test_plan_dependent_digest_never_reused_for_another_plan(story):
     assert counts(model)['story_digest']==2
 
 
-def test_missing_review_keeps_candidate_pending_without_rewriting_everything(story):
-    store,state,model,pipeline=story;candidate_model(story);original=model.ask
-    def ask(stage,*a,**k):return {'passed':True,'issues':[]} if stage=='script_review' else original(stage,*a,**k)
+def test_missing_review_keeps_single_draft_without_rewriting(story):
+    _,state,model,pipeline=story;grounding_model(story);original=model.ask
+    def ask(stage,*a,**k):return {'passed':True,'issues':[]} if stage=='script_polish' else original(stage,*a,**k)
     model.ask=ask
     saved=pipeline.generate(state['revision'])
-    assert saved['candidate_comparison']['status']=='needs_review'
-    assert all(c['status']=='needs_review' and c['script']['segments'] for c in saved['candidates'])
+    assert saved['script']['segments'] and not saved['script']['narrative_review']['passed']
     pipeline.generate(saved['revision'])
-    assert counts(model)['write_story']==2 and counts(model)['check']==0
+    assert counts(model)['write_story']==1 and counts(model)['check']==0
 
 
-def test_comparison_must_quote_current_candidate_and_cannot_auto_select(story):
-    _,state,model,pipeline=story;candidate_model(story);original=model.ask
-    def ask(stage,*a,**k):
-        raw=original(stage,*a,**k)
-        if stage=='candidate_compare':raw['candidates'][0]['citations'][0]['text']='伪造的原句'
-        return raw
-    model.ask=ask;saved=pipeline.generate(state['revision'])
-    assert saved['candidate_comparison']['status']=='needs_review' and not saved.get('selected_candidate_id')
-    with pytest.raises(StoryError):pipeline.verify_selected(saved['revision'])
-
-
-def test_failed_candidate_can_resume_without_regenerating_successful_sibling(story):
-    _,state,model,pipeline=story;candidate_model(story);original=model.ask;fail=True
+def test_failed_write_resumes_single_script_without_replanning(story):
+    store,state,model,pipeline=story;grounding_model(story);original=model.ask;fail=True
     def ask(stage,prompt,*a,**k):
-        if stage=='write_story' and 'K002' in prompt and fail:raise StoryError('模拟第二候选中断')
+        if stage=='write_story' and fail:raise StoryError('模拟写作中断')
         return original(stage,prompt,*a,**k)
-    model.ask=ask;first=pipeline.generate(state['revision'])
-    assert first['candidates'][0]['script']['segments'] and not first['candidates'][1]['script']['segments']
-    kept=copy.deepcopy(first['candidates'][0]);fail=False
-    resumed=pipeline.generate(first['revision'])
-    assert resumed['candidates'][0]==kept and len(resumed['candidates'])==2
-    assert resumed['candidates'][1]['candidate_id']=='K002' and resumed['candidates'][1]['script']['segments']
-    assert counts(model)['write_story']==2
+    model.ask=ask
+    with pytest.raises(StoryError,match='模拟写作中断'):pipeline.generate(state['revision'])
+    failed=store.read()
+    assert failed['stage']=='writing_failed' and not failed['script']['segments']
+    fail=False
+    resumed=pipeline.generate(failed['revision'])
+    assert resumed['script']['segments'] and 'error' not in resumed
+    assert counts(model)['write_story']==1 and counts(model)['direct']==1
 
 
 def test_unrelated_event_change_keeps_scoped_check_but_continuity_image_change_invalidates(story):
-    _,state,model,pipeline=story;candidate_model(story)
-    state=pipeline.generate(state['revision']);state=pipeline.select(state['revision'],'K001')
-    verified=pipeline.verify_selected(state['revision']);segment=verified['script']['segments'][0]
+    _,state,model,pipeline=story;grounding_model(story)
+    state=pipeline.generate(state['revision'])
+    verified=pipeline.verify(state['revision']);segment=verified['script']['segments'][0]
     bible=copy.deepcopy(verified['bible']);bible['events'][-1]['summary']='改变后续未讲述的事件依据'
     assert grounded_units(bible,segment)
     bible['panels'][0]['sha256']='changed'
@@ -231,16 +204,16 @@ def test_identity_failure_retries_identity_without_reanalyzing_panels_or_boundar
 
 
 def test_compact_prompts_keep_unknowns_reveals_sources_but_no_nested_checks(story,tmp_path):
-    store,state,model,pipeline=story;candidate_model(story)
+    store,state,model,pipeline=story;grounding_model(story)
     state['bible']['characters']=[{'character_id':'C9','name':None,'name_status':'unknown','gender':None,
         'pending_names':[{'name':'闻溪','source_panel_id':'5'}],'identity_evidence':[{'detail':'UNRELATED_PROOF_HISTORY'}]}]
     state=store.save(state,'fixture_unknown',state['revision'])
-    generated=pipeline.generate(state['revision']);script=generated['candidates'][0]['script']
+    generated=pipeline.generate(state['revision']);script=generated['script']
     for s in script['segments']:s['fact_check']={'sentences':['NESTED_CHECK_SENTINEL'],'grounding':{'units':['UNITS_SENTINEL']}}
-    ScriptWriter(model).review_story(generated['bible'],generated['candidates'][0]['plan'],script['segments'])
+    ScriptWriter(model).polish_story(generated['bible'],generated['plan'],script['segments'])
     prompt=model.calls[-1][1]
     assert all(x not in prompt for x in ('NESTED_CHECK_SENTINEL','UNITS_SENTINEL','UNRELATED_PROOF_HISTORY'))
-    assert 'pending_names' in prompt and 'unknown' in prompt and 'source_panel_id' in prompt
+    assert all(x not in prompt for x in ('pending_names','source_panel_id','闻溪'))
     prior={'summary':[{'text':'上一话过桥','event_ids':['H1']}], 'background':[{'text':'更早的沙流规则','event_ids':['H0']}],
         'character_states':[{'character_id':'C9','facts':[{'text':'姓名仍未确认','source_panel_ids':['H图']}]}],
         'open_threads':[{'text':'寻找断绳','event_ids':['H1']}],'events':['HUGE_EVENT_TABLE'],'panels':['HUGE_PANEL_TABLE']}
@@ -349,20 +322,52 @@ def test_long_reference_is_distilled_once_keeps_unknowns_and_originals_local(tmp
     prepare_reference_brief(store,model,changed);assert len(calls)==2
 
 
-def test_text_review_uses_program_sources_without_claiming_a_model_fact_table(story):
-    store,state,model,pipeline=story;candidate_model(story)
+def test_interest_review_leaves_source_evidence_in_original_records(story):
+    store,state,model,pipeline=story;grounding_model(story)
     bible=state['bible']
     for e in bible['events']:
         e['evidence']=[{'kind':'visual','detail':'FULL_VISUAL_FORENSICS_SENTINEL'}]
         e['dialogue']=[{'text':'DUPLICATE_EVENT_DIALOGUE_SENTINEL'}]
     state=store.save(state,'fixture_full_local_evidence',state['revision'])
     saved=pipeline.generate(state['revision'])
-    review_prompt=next(p for stage,p,_,_ in model.calls if stage=='script_review')
+    review_prompt=next(p for stage,p,_,_ in model.calls if stage=='script_polish')
     info=data(review_prompt)
     assert 'fact_sheet' not in info and 'sources' not in info
-    assert 'fact_sheet' not in saved['candidates'][0]['script']
-    fallback=text_evidence(bible,saved['candidates'][0]['plan']['beats'])
+    assert 'fact_sheet' not in saved['script']
+    fallback=text_evidence(bible,saved['plan']['beats'])
     assert fallback['events'][0]['dialogue']==bible['events'][0]['dialogue']
-    assert 'FULL_VISUAL_FORENSICS_SENTINEL' in review_prompt  # Unique evidence is no longer replaced by a digest.
+    assert set(info)=={'style','polish_options','script'}
+    assert 'FULL_VISUAL_FORENSICS_SENTINEL' not in review_prompt
     assert counts(model)['story_digest']==0
     assert saved['bible']['analysis_events']==bible['events']
+
+
+def test_interrupted_text_review_resumes_without_another_write(story):
+    store,state,model,pipeline=story;grounding_model(story)
+    generated=pipeline.generate(state['revision'])
+    generated['script'].pop('narrative_review')
+    generated['stage']='text_review_pending'
+    saved=store.save(generated,'fixture_interrupted_review',generated['revision'])
+    before=counts(model)
+    resumed=pipeline.generate(saved['revision'])
+    assert resumed['script']['segments']==saved['script']['segments']
+    assert counts(model)-before=={'script_polish':1}
+    assert resumed['stage']=='review'
+
+
+def test_removed_candidate_keyword_is_not_supported(story):
+    _,state,model,pipeline=story
+    with pytest.raises(TypeError):pipeline.generate(state['revision'],candidate_count=2)
+    assert not model.calls
+
+
+def test_switching_script_model_refreshes_only_current_draft_and_preserves_old_version(story):
+    store,state,model,pipeline=story;grounding_model(story)
+    version='old-model'
+    model.cache_identity=lambda stage:{'model':version if stage=='write_story' else 'stable-'+stage}
+    first=pipeline.generate(state['revision']);before=counts(model)
+    version='openai/gpt-6-luna'
+    second=pipeline.generate(first['revision'])
+    assert counts(model)-before=={'write_story':1,'script_polish':1}
+    assert second['script']['generation_basis']!=first['script']['generation_basis']
+    assert store.read(first['revision'])==first

@@ -22,7 +22,7 @@ from pipeline.story_bible import atomic_json
 from pipeline.story_inputs import prepare_panels
 from pipeline.story_model import StoryModel, prompt_json
 from pipeline.story_pipeline import StoryPipeline
-from pipeline.narration_review import review_ready
+from pipeline.narration_review import polish_ready
 from pipeline.semantic_grounding import grounded_units
 from story_app import import_chapter
 
@@ -69,7 +69,7 @@ def report(root):
             'segments':len(segments),'characters_in_script':sum(len(s['text']) for s in segments),
             'fact_statuses':dict(Counter((s.get('fact_check') or {}).get('status','missing') for s in segments)),
             'grounded_segments':sum(bool(grounded_units(bible,s)) for s in segments),
-            'narrative_review_ready':bool(segments and review_ready((state.get('script') or {}).get('narrative_review'),bible,state.get('plan'),segments)),
+            'polish_complete':bool(segments and polish_ready((state.get('script') or {}).get('narrative_review'),bible,state.get('plan'),segments)),
             'memory_status':memory.get('status'),'memory_usable':bool(memory_usable(state) and context_current(store,bible)),
             'memory_error':memory.get('error'),'prior_status':bible.get('prior_context',{}).get('status'),
             'human_statuses':dict(Counter(s['review_status'] for s in segments)),

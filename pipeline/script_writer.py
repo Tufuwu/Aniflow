@@ -3,8 +3,8 @@ import re
 from pipeline.story_model import prompt_json, require, text, validated_result
 from pipeline.story_bible import StoryError
 from pipeline.narrative_director import STYLES
-from pipeline.narration_review import repeat_candidates, information_issues, content_issues, review_basis
-from pipeline.character_identity import premature_name_issues
+from pipeline.narration_review import (polish_basis, ENGAGEMENT_POLISH_VERSION,
+                                        ENGAGEMENT_POLISH_PROMPT_VERSION, ENGAGEMENT_POLISH_STYLE)
 from pipeline.semantic_grounding import grounded_units
 from pipeline.fact_material import fact_material, writing_material, FACT_CONTRACT_VERSION
 from pipeline.input_compaction import compact_json
@@ -238,83 +238,32 @@ uncertain 和 unverified_reference 不能作为确认事实；不得扩展本话
                            "text":narration,"review_status":"pending","fact_check":None})
         return result
 
-    def review_story(self, bible, plan, segments, feedback=None, facts=None):
-        candidates = repeat_candidates(segments)
-        prompt = """Narration Review v5。通读全稿，检查故事推进、口头讲述与事实范围，不评价长度或要求压缩。
-对照原事件分析检查正文取舍、动机、触发与结果，不能因事件ID存在就认为已讲清。
-有fact_sheet时也只作待核整理稿，须与events的原有证据及未知状态对照；模型整理或确认不等于正确。
-事实简表仍可能识别有误，未知及未揭晓限制不得升级；需要更多依据时定向指出事件和疑点，原图事实由选中稿的严格核验处理。
-prior_context 是非重复前情，reference_context 是按需参考；uncertain 与 unverified_reference 不得升级为确认事实，也不能扩大本话范围。
-有 plan.opening_recap 时，在 opening 项检查全稿是否以一句有据的上一话回顾开头、随后自然转入本话；遗漏或展开多句时定向修改首段，后文重复回顾时指出实际重复节点。
-回顾不得把历史当作本话新发生，不得为衔接编造因果或升级确定性；没有 opening_recap 时不要求填充前情。
-本环节没有提供原图，不能声称看见气泡指向、构图或人物动作；无法确认的疑点指向来源，留给严格逐句原图核验。
-已经有原图核验通过的句子，不得仅凭对画面的猜测再次判错；仍可阻止文本本身明确存在的主线缺失、重复、矛盾或分析腔。
-检查动机和转折是否被讲清、行动是否跳跃、信息是否重复、称呼是否前后一致、结尾是否兑现已有目标。
-禁止读图说明（红色对白写着/画面显示/旁白说）、外貌清单和“是谁还没交代”等分析腔。
-影响理解的转折触发、关键行动与兑现须在正文讲通，不接受仅有 event_id 的形式覆盖，不能把推测心理当动机补写。
-原始事件是证据范围，不是每条都必须朗读的清单；自然叙述已讲清节点推进时，不要求补每个取手机、脚步、表情或外貌。
-有作用的长背景、氛围和停顿可保留，不按长度全删，也不要求每句话都新增客观事件。
-稳定自然称呼已能指代的人物，不要要求补姓名、性别或未经证实的关系。不要为未知说话者强行指定身份。
-禁止要求补造原作未证实的开枪者、心理、区域是否被雾波及或因果。原作未显示的结果应省去断言，而不是要求编齐。
-可建议省去无用的未知信息，不可要求把未知写成已知。反馈必须可依据已有证据执行。
-会破坏理解的必要背景缺失、开篇没有具体关注点、人物难辨、取证或动作清单语气、动机缺失、矛盾、重复可作为有证据的定向问题。
-没有逐个说明脚步、取手机、地址细节、未知说话人身份，不单独构成阻断。自然称呼已清楚时不要求补身份。
-可选的措辞润色和原作本身的未知信息放入 suggestions，不要求凭空补齐，不能为追求完美反复返工。
-没有有效问题时保留原稿，不无目标重写。候选表达可不同，但事实范围、时间、因果和揭晓顺序不可改变。
-返回 {"passed":true,"blocking_issues":[],"suggestions":[]}；存在真实阻断才 passed=false。
-blocking_issues 每项列 event_id、detail 和可依据现有证据执行的修正建议。
-另返回 information_flow，逐段按原顺序列 {event_id,new_information:["逐字引用本段的新信息/行动/情绪变化/有作用的安静停顿"],
-repeats:[{earlier_event_id,purpose:"redundant|callback|emphasis|payoff",detail:"比较两段实际讲述的目标、行动和结果",
-new_information:"有效回扣必须逐字引用本段 new_information 中体现其新理解/情绪/兑现的一项"}]}。
-即使用词不同也要检查连续段反复解释同一目标、行动或结果。不能仅因关键词相同判重复。
-外貌称呼重复、姿态和构图清单若没有推进作用，应给出定向修改意见，不强行补姓名或心理。
-对 repeat_candidates 每项返回 repeat_assessments:[{repeat_id,purpose:"redundant|callback|emphasis|payoff",
-reason:"作用",new_information:"逐字引用后段新增推进，不能再引用重复文本"}]。
-有作用的回扣、强调、伏笔兑现可保留；简单重说食物/工具/目标/搬运结果等已交代内容应标 redundant。
-另返回 content_checks，按 opening,turns,exposition,references,action,emotion,ending 顺序逐项复核。
-每项为 {aspect,verdict:"passed|issues|not_applicable",detail:"比较正文与证据后作出判断的具体理由",
-citations:[{event_id:"稿件节点锚点",text:"当前正文连续原文"}],evidence_event_ids:["原始事件ID"],
-issues:[{event_id:"仅需修改的节点锚点",detail:"具体影响",suggestion:"依据现有证据如何修正"}]}。
-opening/exposition/references/action 另含 assessments 对象，各子项均须给出基于当前正文及证据的具体理由：
-opening: {entry_context:"进入故事需要哪些背景，已交代/缺少什么",concrete_focus:"背景的后果/反差/危险/代价建立什么具体关注点",
-follow_through:"后续哪些行动承接这个关注点"}；
-exposition: {purpose:"必要背景、可后解释、仅核验分别怎样影响当前处境与选择；长背景与氛围有无作用",
-placement:"是否保持原作时间、因果和揭示顺序，是否隐藏已明确的信息或提前泄露"}；
-references: {listener_tracking:"听者不看画面能否持续分清人物并理解选择",identity_timing:"逐一对照姓名/关系/身份对应证据与揭晓位置",
-grounded_labels:"稳定称呼的依据；中性词有无暗示未经确认的职业、关系、行为身份"}；
-action: {oral_delivery:"引用哪些句子适合直接讲述，哪些仍像取证/逐格说明/动作清单；给出不补事实的改法，结合长短句、对白、消息与反应判断"}。
-缺少这些检查不能当作复核通过。子项依据引用沿用本项 citations/evidence_event_ids，不增加分数或句长指标。
-passed/issues 都须引用正文和事件依据；缺失内容可引用附近正文来定位。issues 必须给出定向修正项。
-只有原作没有相关场面时才可 not_applicable，并说明原因；opening/references/ending 不能跳过。
-opening 不机械计时或要求固定开场顺序；turns 核对实际转折的原态度、触发信息、决定、行动与兑现。
-emotion 检查反应、哭喊、安慰或有作用的沉默是否有空间；ending 检查已有结果兑现与真正的新目标，避免重复收尾。
-资料："""+compact_json({**editor_material(bible,with_opening_recap(bible,plan),facts,segments),"script":script_text(segments),
-                       **text_evidence(bible,segments,facts)})
-        prompt += '\nrepeat_candidates：'+prompt_json(candidates)
-        if feedback:
-            prompt += '\n上一份复核响应未通过校验：'+prompt_json(revision_feedback(feedback))+'。重新返回完整复核；citations.text 必须逐字复制当前正文连续片段，不能缩写、省略号代替或改标点；不要改写正文。'
-        raw = self.model.ask('script_review',prompt,fresh=bool(feedback))
-        return self.validate_review(bible,plan,segments,raw,candidates)
+    def polish_story(self, bible, plan, segments, fresh=False, facts=None, options=None):
+        """Turn the whole draft into a performed recap, preserving event bindings."""
+        from pipeline.narration_polish import (polish_options, script_view, polish_prompt,
+                                               analyze_script, merge_polish, length_report)
+        options = polish_options(options)
+        script = script_view(segments)
+        analysis = analyze_script(self.model,script,options,fresh) if options['analyze_first'] else None
+        raw = self.model.ask('script_polish',polish_prompt(script,options,analysis),fresh=fresh)
+        result,changed,unchanged = merge_polish(raw,segments,script)
+        from pipeline.story_bible import digest
+        model_identity = self.model.cache_identity('script_polish') if hasattr(self.model,'cache_identity') else None
+        # A completion receipt is not semantic verification or human approval.
+        completion = {'passed':True,'issues':[], 'basis_hash':polish_basis(bible,plan,result,options),
+            'engagement_polish':{'version':ENGAGEMENT_POLISH_VERSION,'status':'completed',
+                'style':ENGAGEMENT_POLISH_STYLE,'prompt_version':ENGAGEMENT_POLISH_PROMPT_VERSION,
+                'options':options,'analysis':analysis,
+                'model_basis':digest(model_identity) if model_identity is not None else None,
+                'model':{k:model_identity[k] for k in ('model','backend','host') if k in model_identity}
+                        if model_identity is not None else None,
+                'validation':{'structure':'passed','event_order':'passed','locked_text':'passed',
+                              'mode':'performance_rewrite',
+                              'length':length_report(script,result,options)},
+                'ignored_unchanged_event_ids':unchanged,
+                'input_hash':polish_basis(bible,plan,segments,options),'changed_event_ids':changed}}
+        return {'segments':result,'completion':completion}
 
-    def validate_review(self, bible, plan, segments, raw, candidates=None):
-        """Same fail-closed contract for a full response or model quote repair."""
-        candidates = repeat_candidates(segments) if candidates is None else candidates
-        if 'blocking_issues' in raw:
-            require(isinstance(raw['blocking_issues'],list) and isinstance(raw.get('suggestions',[]),list),'整稿复核格式无效')
-            raw = {**raw,'issues':raw['blocking_issues']}
-        require(type(raw.get('passed')) is bool and isinstance(raw.get('issues'),list), '整稿复核格式无效')
-        flow_issues, information_review = information_issues(segments, raw, candidates)
-        raw['information_review'] = information_review
-        content_findings, content_review = content_issues(segments,bible,raw)
-        raw['content_review'] = content_review
-        raw['basis_hash'] = review_basis(bible,plan,segments)
-        local_issues = narration_lint(segments) + flow_issues + content_findings + premature_name_issues(bible,segments)
-        if local_issues:
-            raw = {**raw,'passed':False,'issues':raw['issues']+local_issues}
-        if information_review['status']!='reviewed' or content_review['status']!='reviewed' or raw['issues']:
-            raw['passed'] = False
-        raw['blocking_issues'] = raw['issues']
-        return raw
 
     def revise_story(self,bible,plan,segments,feedback,facts=None):
         """Edit the actual rejected draft instead of recreating it from the evidence ledger."""

@@ -12,7 +12,7 @@ from pipeline.story_bible import StoryError
 from pipeline.fact_checker import FactChecker
 from pipeline.fact_material import SOURCE_MATERIAL_VERSION
 from test_engagement_flow import story
-from test_candidate_reuse import candidate_model, counts
+from test_story_reuse import grounding_model, counts
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +45,7 @@ def with_context(story, rows, decisions):
 
 
 def test_same_chapter_paraphrase_is_not_sent_again_or_as_character_forensics(story):
-    candidate_model(story)
+    grounding_model(story)
     state = with_context(story, [
         {'text':'DUPLICATE_PARAPHRASED_WORLD_AND_ACTION', 'event_ids':['E1','E2'], 'status':'confirmed'}],
         [('covered','本规划首节点的必要环境、拒绝和触发事实已完整涵盖')])
@@ -56,28 +56,28 @@ def test_same_chapter_paraphrase_is_not_sent_again_or_as_character_forensics(sto
     saved = story[3].generate(story[0].read()['revision'])
     assert counts(story[2])['story_digest'] == 0
     for stage,prompt,_,_ in story[2].calls:
-        if stage in {'write_story','script_review'}:
+        if stage in {'write_story','script_polish'}:
             info = payload(prompt, '叙事依据：' if stage == 'write_story' else '资料：')
-            assert info['prior_context'] == []
-            assert info['reference_context'] == []
+            if stage=='write_story':
+                assert info['prior_context'] == [] and info['reference_context'] == []
+                assert {e['event_id'] for e in info['events']} == {'E1','E2','E3','E4','E5'}
+            else:
+                assert set(info)=={'style','polish_options','script'}
             assert 'fact_sheet' not in info
-            assert {e['event_id'] for e in info['events']} == {'E1','E2','E3','E4','E5'}
             assert not any(s in prompt for s in ('DUPLICATE_PARAPHRASED_WORLD_AND_ACTION',
                                                  'FORENSICS_HISTORY'))
     assert saved['bible']['prior_context']['background'][0]['text'] == 'DUPLICATE_PARAPHRASED_WORLD_AND_ACTION'
-    assert saved['candidates'][0]['script']['source_material_basis']['version'] == SOURCE_MATERIAL_VERSION
-    assert 'fact_sheet' not in saved['candidates'][0]['script']
-    comparison = next(p for stage,p,_,_ in story[2].calls if stage == 'candidate_compare')
-    assert len(payload(comparison,'资料：')['shared_material']) == 1
-    assert 'DUPLICATE_PARAPHRASED_WORLD_AND_ACTION' not in comparison and 'FORENSICS_HISTORY' not in comparison
+    assert saved['script']['source_material_basis']['version'] == SOURCE_MATERIAL_VERSION
+    assert 'fact_sheet' not in saved['script']
+    assert all(stage != 'candidate_compare' for stage,_,_,_ in story[2].calls)
 
 
 def test_first_chapter_without_history_keeps_context_empty(story):
-    candidate_model(story)
+    grounding_model(story)
     saved = story[3].generate(story[1]['revision'])
-    script = saved['candidates'][0]['script']
+    script = saved['script']
     assert context_catalog(saved['bible']) == []
-    assert editor_material(saved['bible'],saved['candidates'][0]['plan'])['prior_context'] == []
+    assert editor_material(saved['bible'],saved['plan'])['prior_context'] == []
     assert 'fact_sheet' not in script
 
 
@@ -172,9 +172,9 @@ def test_invalid_reference_selection_is_rejected(story,mutation):
 
 
 def test_text_projection_keeps_reveal_order_and_never_changes_strict_check(story):
-    candidate_model(story)
+    grounding_model(story)
     saved = story[3].generate(story[1]['revision'])
-    script = saved['candidates'][0]['script']; plan = saved['candidates'][0]['plan']
+    script = saved['script']; plan = saved['plan']
     bible = saved['bible']; segment = script['segments'][1]
     bible['characters'] = [{'character_id':'C1','name':'闻溪','name_status':'confirmed','name_claims':[
         {'name':'闻溪','source_panel_id':'5','reveal_panel_id':'5','reveal_order':4,
@@ -192,11 +192,11 @@ def test_text_projection_keeps_reveal_order_and_never_changes_strict_check(story
     assert {e['event_id'] for e in material['plan']['beats']} == {b['event_id'] for b in plan['beats']}
 
 
-def test_context_and_plan_dependencies_invalidate_without_overwriting_old_candidates(story):
-    candidate_model(story)
+def test_context_and_plan_dependencies_invalidate_without_overwriting_old_versions(story):
+    grounding_model(story)
     state = with_context(story,[{'text':'必要但待核验的旧规则','event_ids':[]}],[('uncertain','来源不足')])
     saved = story[3].generate(state['revision'])
-    candidate = saved['candidates'][0]; writer = ScriptWriter(story[2],story[0])
+    candidate = saved; writer = ScriptWriter(story[2],story[0])
     before = copy.deepcopy(saved); facts = writer.prepare_facts(saved['bible'],candidate['plan'])
     assert counts(story[2])['story_digest'] == 1
     changed = copy.deepcopy(saved['bible']); changed['prior_context']['background'][0]['text'] += '修订'
@@ -210,10 +210,10 @@ def test_context_and_plan_dependencies_invalidate_without_overwriting_old_candid
     assert story[0].read(saved['revision']) == before
 
 
-def test_changed_plan_uses_new_candidate_group_and_preserves_previous_versions(story):
-    candidate_model(story)
+def test_changed_plan_rewrites_single_draft_and_preserves_previous_versions(story):
+    grounding_model(story)
     first = story[3].generate(story[1]['revision'])
-    kept = copy.deepcopy(first['candidates'])
+    kept = copy.deepcopy(first)
     original = story[2].ask
     def ask(stage,prompt,images=None,fresh=False):
         raw = original(stage,prompt,images,fresh)
@@ -222,10 +222,8 @@ def test_changed_plan_uses_new_candidate_group_and_preserves_previous_versions(s
         return raw
     story[2].ask = ask
     changed = story[3].generate(first['revision'],max_events=3)
-    assert changed['candidates'][:2] == kept
-    assert changed['candidate_set'] == ['K003','K004']
     assert counts(story[2])['story_digest'] == 0
-    assert changed['candidates'][2]['plan']['beats'][0]['title'] != kept[0]['plan']['beats'][0]['title']
+    assert changed['plan']['beats'][0]['title'] != kept['plan']['beats'][0]['title']
     assert story[0].read(first['revision']) == first
 
 
@@ -233,9 +231,8 @@ def test_audit_counts_three_inputs_separately_and_does_not_write_project(story):
     from tools.audit_prompt_inputs import audit
     from pipeline.story_pipeline import StoryPipeline
     store,state,model,pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     state = pipeline.generate(state['revision'])
-    state = pipeline.select(state['revision'],'K001')
     before = {p.relative_to(store.root):p.read_bytes() for p in store.root.rglob('*') if p.is_file()}
     calls = len(model.calls)
     result = audit(store.root)

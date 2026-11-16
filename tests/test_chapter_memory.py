@@ -18,7 +18,7 @@ from pipeline.story_api import create_story_blueprint, story_store
 from pipeline.story_bible import StoryBible, StoryConflict, digest
 from pipeline.story_pipeline import StoryPipeline
 from test_character_introduction import panel, character, revealed_bible
-from test_engagement_flow import story, generate, review_payload
+from test_engagement_flow import story, generate, polish_payload
 
 
 @pytest.fixture(autouse=True)
@@ -56,8 +56,8 @@ class MemoryModel:
             if self.bad=='missing':rows.pop()
             if self.bad=='outage':raise RuntimeError('simulated memory review outage')
             return {'claims':rows}
-        if stage=='script_review':
-            return review_payload(info['script'],[e['event_id'] for e in info['events']])
+        if stage=='script_polish':
+            return polish_payload(info['script'])
         raise AssertionError(stage)
 
 
@@ -82,7 +82,7 @@ def ready_state(store,bible=None):
                 'display_panel_ids':e['source_panel_ids'],'background_event_ids':[]}]}]
         segment['fact_check']={'status':'passed','grounding':make_grounding(bible,segment,rows),'sentences':rows}
         segments.append(segment)
-    review=ScriptWriter(MemoryModel()).review_story(bible,plan,segments)
+    review=ScriptWriter(MemoryModel()).polish_story(bible,plan,segments)['completion']
     state=store.read()
     state.update(bible=bible,plan=plan,script={'segments':segments,'narrative_review':review},stage='review')
     return store.save(state,'fixture_ready',state['revision'])
@@ -116,7 +116,7 @@ def test_memory_generated_and_reviewed_without_touching_script_or_human_status(t
     assert all(c[3] for c in model.calls)
 
 
-def test_generation_automatically_saves_memory_after_final_script_review(story):
+def test_generation_automatically_saves_memory_after_final_script_polish(story):
     model=story[2];original=model.ask;memory=MemoryModel()
     def ask(stage,prompt,images=None,fresh=False):
         if stage.startswith('chapter_memory'):return memory.ask(stage,prompt,images,fresh)
@@ -235,7 +235,7 @@ def test_current_saved_settings_enter_planning_once_without_repeating_in_other_s
     planning = next(prompt for s,prompt,_,_ in model.calls if s=='direct')
     assert planning.count('海雾会切断渡口') == 1
     assert all(stage != 'story_digest' for stage,_,_,_ in model.calls)
-    for stage in ('direct','write_story','script_review'):
+    for stage in ('direct','write_story','script_polish'):
         if stage != 'direct':
             assert '海雾会切断渡口' not in next(prompt for s,prompt,_,_ in model.calls if s==stage)
     writer=ScriptWriter(model)

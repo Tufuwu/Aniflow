@@ -31,8 +31,8 @@ class Transport:
     ('context_digest','CONTEXT_SYSTEM','writer'),('direct','PLAN_SYSTEM','writer'),
     ('story_digest','DIGEST_SYSTEM','writer'),('write','WRITER_SYSTEM','writer'),
     ('write_story','WRITER_SYSTEM','writer'),('rewrite_story','WRITER_SYSTEM','writer'),
-    ('script_review','REVIEW_SYSTEM','writer'),('story_plan_review','REVIEW_SYSTEM','writer'),
-    ('candidate_compare','REVIEW_SYSTEM','writer'),('chapter_memory','MEMORY_SYSTEM','writer'),
+    ('script_polish','POLISH_SYSTEM','writer'),('script_polish_analysis','POLISH_ANALYSIS_SYSTEM','writer'),('story_plan_review','REVIEW_SYSTEM','writer'),
+    ('chapter_memory','MEMORY_SYSTEM','writer'),
     ('analyze','SYSTEM','vision'),('reconcile','SYSTEM','vision'),('identity','SYSTEM','vision'),
     ('check','SYSTEM','checker'),('chapter_memory_review','SYSTEM','vision'),
     ('shot_select','SYSTEM','vision'),('visual_review','SYSTEM','vision')])
@@ -68,6 +68,53 @@ def test_reference_role_preserves_reference_status_and_first_chapter_limit():
     assert '推测、未知关系保持原状态' in prompts.CONTEXT_SYSTEM
     assert prompts.system_for_stage('write_story')==prompts.WRITER_SYSTEM
     assert '中文故事解说作者' in prompts.WRITER_SYSTEM
+
+
+@pytest.mark.parametrize('stage,expected', [
+    ('write', 'script-pro'), ('write_story', 'script-pro'), ('rewrite_story', 'script-pro'),
+    ('direct', 'text-flash'), ('event_integration', 'text-flash'),
+    ('story_digest', 'text-flash'), ('script_polish', 'text-flash'),
+    ('context_digest', 'text-flash'),
+    ('chapter_memory', 'text-flash'), ('check', 'checker'), ('analyze', 'vision')])
+def test_script_model_config_routes_actual_requests_only_for_writing(tmp_path, monkeypatch, stage, expected):
+    monkeypatch.setattr(prompts.config, 'STORY_WRITER_MODEL', 'text-flash')
+    monkeypatch.setattr(prompts.config, 'STORY_SCRIPT_MODEL', 'script-pro')
+    transport = Transport()
+    model = StoryModel(StoryBible(tmp_path/'chapter'), transport,
+                       vision_model='vision', checker_model='checker')
+    model.ask(stage, '离线路由验证')
+    assert transport.calls[0]['model'] == model.cache_identity(stage)['model'] == expected
+
+
+def test_script_default_and_explicit_model_overrides_remain_compatible(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompts.config, 'STORY_WRITER_MODEL', 'text-flash')
+    monkeypatch.setattr(prompts.config, 'STORY_SCRIPT_MODEL', '')
+    store = StoryBible(tmp_path/'chapter')
+    assert StoryModel(store, Transport())._stage_model('write_story')[0] == 'text-flash'
+    monkeypatch.setattr(prompts.config, 'STORY_SCRIPT_MODEL', 'script-pro')
+    legacy = StoryModel(store, Transport(), writer_model='explicit-text')
+    assert legacy._stage_model('write_story')[0] == legacy._stage_model('direct')[0] == 'explicit-text'
+    explicit = StoryModel(store, Transport(), writer_model='explicit-text', script_model='explicit-script')
+    assert explicit._stage_model('write_story')[0] == 'explicit-script'
+    assert explicit._stage_model('direct')[0] == 'explicit-text'
+
+
+def test_script_model_change_isolates_writing_cache_and_retains_old_traces(tmp_path):
+    store = StoryBible(tmp_path/'chapter')
+    transport = Transport()
+    old = StoryModel(store, transport, writer_model='text-flash', script_model='script-flash')
+    new = StoryModel(store, transport, writer_model='text-flash', script_model='script-pro')
+    assert old.cache_identity('direct') == new.cache_identity('direct')
+    assert old.cache_identity('script_polish') == new.cache_identity('script_polish')
+    for stage in ('write', 'write_story', 'rewrite_story'):
+        assert old.cache_identity(stage) != new.cache_identity(stage)
+        old.ask(stage, '同一份离线写稿提示')
+    previous = {p:p.read_bytes() for name in ('cache', 'calls') for p in (store.root/name).glob('*.json')}
+    for stage in ('write', 'write_story', 'rewrite_story'):
+        new.ask(stage, '同一份离线写稿提示')
+        new.ask(stage, '同一份离线写稿提示')
+    assert [r['model'] for r in transport.calls] == ['script-flash']*3 + ['script-pro']*3
+    assert all(p.read_bytes() == data for p, data in previous.items())
 
 
 @pytest.mark.parametrize('stage,expected', [('event_integration', None), ('direct', 16000), ('context_digest', 6000)])

@@ -8,13 +8,13 @@ from PIL import Image
 
 from pipeline.character_identity import confirm_claim, identity_context, premature_name_issues
 from pipeline.fact_checker import FactChecker
-from pipeline.narration_review import CONTENT_DETAILS, content_issues, review_ready
+from pipeline.narration_review import polish_ready
 from pipeline.script_writer import ScriptWriter, narration_lint
 from pipeline.semantic_grounding import grounded_units
 from pipeline.story_analyzer import StoryAnalyzer
 from pipeline.story_bible import StoryBible, StoryError
 from pipeline.story_pipeline import StoryPipeline
-from test_engagement_flow import story, generate, review_payload
+from test_engagement_flow import story, generate, polish_payload
 from test_semantic_alignment import mapped
 
 
@@ -223,43 +223,10 @@ def test_unknown_roster_can_write_with_stable_supported_labels():
     assert narration_lint([result])
 
 
-@pytest.mark.parametrize('aspect',list(CONTENT_DETAILS))
-def test_old_content_response_cannot_skip_new_focus_timing_and_oral_checks(aspect):
-    segments=[{'event_id':'A','text':'沙流开始倒转，桥边的人抓住绳索。'}]
-    raw=review_payload(segments,['A'])
-    next(c for c in raw['content_checks'] if c['aspect']==aspect).pop('assessments')
-    _,review=content_issues(segments,{'events':[{'event_id':'A'}]},raw)
-    assert review['status']=='needs_review' and aspect in review['reason']
 
 
-@pytest.mark.parametrize('aspect,field', [('opening','concrete_focus'),('action','oral_delivery')])
-def test_background_focus_and_oral_findings_use_current_targeted_revision(story,aspect,field):
-    state=generate(story);before=copy.deepcopy(state['script']['segments']);model=story[2]
-    original=model.ask;changed=False
-    def ask(stage,prompt,images=None,fresh=False):
-        nonlocal changed
-        if stage=='script_review':
-            data=json.JSONDecoder().raw_decode(prompt.split('资料：',1)[1])[0]
-            raw=review_payload(data['script'],['E1','E2','E3','E4','E5'])
-            if not changed:
-                c=next(c for c in raw['content_checks'] if c['aspect']==aspect)
-                c['assessments'][field]='现稿反复查看，没有把暴雨的危险与选择连起来；像过程记录'
-                c.update(verdict='issues',issues=[{'event_id':'E1','detail':c['assessments'][field],
-                         'suggestion':'只用E1暴雨和E2送药消息，连起拒绝与开门，不补心理'}])
-            return raw
-        if stage=='rewrite_story':
-            data=json.JSONDecoder().raw_decode(prompt.split('资料：',1)[1])[0]
-            assert data['revision_event_ids']==['E1'] and 'identity_availability' in data
-            changed=True
-            return {'segments':[{'event_id':'E1','text':'门外暴雨不停。他本来不肯开门，听到来人送药才改变主意。'}]}
-        return original(stage,prompt,images,fresh)
-    model.ask=ask;count=model.check_calls
-    result=story[3].revise(state['revision'])
-    assert changed and result['script']['segments'][1:]==before[1:]
-    assert model.check_calls==count+1
-    assert result['script']['segments'][0]['source_panel_ids']==before[0]['source_panel_ids']
-    assert review_ready(result['script']['narrative_review'],result['bible'],result['plan'],result['script']['segments'])
-    assert story[0].read(state['revision'])==state
+
+
 
 
 def test_identity_evidence_change_invalidates_sentence_mapping_and_same_text_revision(mapped):

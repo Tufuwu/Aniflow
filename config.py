@@ -60,7 +60,23 @@ STORY_API_BASE               = os.getenv("STORY_API_BASE", "").rstrip("/")
 STORY_API_KEY                = os.getenv("STORY_API_KEY", "")
 STORY_VISION_MODEL           = os.getenv("STORY_VISION_MODEL", os.getenv("VISION_MODEL", "qwen2.5vl:3b"))
 STORY_WRITER_MODEL           = os.getenv("STORY_WRITER_MODEL", os.getenv("TEXT_WRITER_MODEL", "gemma3:27b"))
+# Optional model for narration writing and revision; other text stages keep the writer model.
+STORY_SCRIPT_MODEL           = os.getenv("STORY_SCRIPT_MODEL", "").strip()
+STORY_SCRIPT_API_BASE        = os.getenv("STORY_SCRIPT_API_BASE", "").rstrip("/")
+STORY_SCRIPT_API_KEY         = os.getenv("STORY_SCRIPT_API_KEY", "")
+# Optional fourth-stage route, independent of drafting and other text stages.
+STORY_POLISH_MODEL           = os.getenv("STORY_POLISH_MODEL", "").strip()
+STORY_POLISH_API_BASE        = os.getenv("STORY_POLISH_API_BASE", "").rstrip("/")
+STORY_POLISH_API_KEY         = os.getenv("STORY_POLISH_API_KEY", "")
 STORY_CHECKER_MODEL          = os.getenv("STORY_CHECKER_MODEL", STORY_VISION_MODEL)
+# Optional independent routes for chapter integration and narrative planning.
+# Empty values preserve the original shared text model/transport.
+STORY_INTEGRATION_MODEL      = os.getenv("STORY_INTEGRATION_MODEL", "").strip()
+STORY_INTEGRATION_API_BASE   = os.getenv("STORY_INTEGRATION_API_BASE", "").rstrip("/")
+STORY_INTEGRATION_API_KEY    = os.getenv("STORY_INTEGRATION_API_KEY", "")
+STORY_PLANNING_MODEL         = os.getenv("STORY_PLANNING_MODEL", "").strip()
+STORY_PLANNING_API_BASE      = os.getenv("STORY_PLANNING_API_BASE", "").rstrip("/")
+STORY_PLANNING_API_KEY       = os.getenv("STORY_PLANNING_API_KEY", "")
 # Optional advertised output capacity for another provider/model. Empty uses
 # the known official provider maximum, or its default when unknown.
 STORY_INTEGRATION_MAX_OUTPUT_TOKENS = os.getenv("STORY_INTEGRATION_MAX_OUTPUT_TOKENS", "").strip()

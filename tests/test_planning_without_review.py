@@ -8,7 +8,7 @@ from pipeline.narrative_director import NarrativeDirector, PLANNING_CONTRACT_VER
 from pipeline.story_bible import StoryError
 from pipeline.story_model import validated_result
 from test_engagement_flow import story
-from test_candidate_reuse import candidate_model, counts
+from test_story_reuse import grounding_model, counts
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +63,7 @@ def test_program_check_does_not_claim_semantic_completeness_or_add_a_review_call
 
 def test_new_planning_cache_does_not_reuse_old_reviewed_contract_or_overwrite_history(story):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     integrated = pipeline.integrate(state['revision'])
     bible = integrated['bible']
     legacy_plan = NarrativeDirector(model).plan(bible)
@@ -76,14 +76,14 @@ def test_new_planning_cache_does_not_reuse_old_reviewed_contract_or_overwrite_hi
     generated = pipeline.generate(integrated['revision'])
     assert counts(model)['direct'] - before['direct'] == 1
     assert counts(model)['story_plan_review'] == 0
-    assert counts(model)['story_digest'] == 0 and counts(model)['script_review'] == 2
-    assert 'completeness_review' not in generated['candidates'][0]['plan']
-    assert generated['candidates'][0]['plan']['planning_validation']['version'] == PLANNING_CONTRACT_VERSION
+    assert counts(model)['story_digest'] == 0 and counts(model)['script_polish'] == 1
+    assert 'completeness_review' not in generated['plan']
+    assert generated['plan']['planning_validation']['version'] == PLANNING_CONTRACT_VERSION
     assert all(p.read_bytes() == data for p, data in old_files.items() if p.name != 'current.json')
     assert store.read(integrated['revision']) == integrated
     assert validated_result(store, model, 'direct', old_dependencies,
                             lambda: pytest.fail('Old history must remain readable')) == legacy_plan
     before = counts(model)
     repeated = pipeline.generate(generated['revision'])
-    assert repeated['candidates'] == generated['candidates']
-    assert all(counts(model)[s] == before[s] for s in ('direct','story_digest','write_story','script_review','story_plan_review'))
+    assert repeated['script'] == generated['script']
+    assert all(counts(model)[s] == before[s] for s in ('direct','story_digest','write_story','script_polish','story_plan_review'))

@@ -11,7 +11,6 @@ from pipeline.shot_selector import (ShotSelectorAgent, GlobalShotOptimizer, buil
 from pipeline.timeline_director import TimelineDirector, audio_duration, validate_shot, validate_timeline
 from pipeline.voice_pipeline import VoicePipelineMixin
 from pipeline.semantic_grounding import attach_tts_boundaries, grounded_units
-from pipeline.narration_review import review_ready
 
 
 class ShotEditingPipeline(VoicePipelineMixin):
@@ -33,11 +32,7 @@ class ShotEditingPipeline(VoicePipelineMixin):
                     (s.get("fact_check") or {}).get("status") == "passed" for s in segments),
                 "所有解说段落必须先通过事实核验与人工审核")
         if source['plan'].get('version',0) >= 5:
-            review = source['script'].get('narrative_review') or {}
-            require(review.get('passed') and not review.get('issues'), '整稿故事连贯性尚未通过')
-            require((review.get('information_review') or {}).get('status')=='reviewed', '整稿新增信息与语义重复尚未复核')
             require(all(grounded_units(source['bible'],s) for s in segments), '缺少当前句子的事实与展示来源关联')
-            require(review_ready(review,source['bible'],source['plan'],segments), '当前整稿的叙事内容复核尚未完成或已失效')
         # A milestone must be in a narrated event or its explicit causal context.
         required = {e for s in segments for e in required_events(source, s)}
         milestones = {eid for eid in (source["plan"].get("milestones") or {}).values() if eid}

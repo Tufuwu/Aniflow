@@ -55,14 +55,11 @@ if __name__ == "__main__":
     run.add_argument("--project", required=True)
     run.add_argument("--style", choices=["faithful", "payoff", "suspense"], default="faithful")
     run.add_argument("--max-events", type=int, default=None, help="兼容旧命令；不用于压缩剧情")
-    run.add_argument('--candidate-count',type=int,choices=[2,3],default=2)
     integrate = commands.add_parser('integrate', help='本话信息整合与事件还原；复用已有分析，不写稿，会调用文字模型')
     integrate.add_argument('--project', required=True)
-    candidates = commands.add_parser('candidates',help='比较、选定或严格核验候选；比较/核验会调用模型')
-    candidates.add_argument('--project',required=True)
-    candidates.add_argument('--action',choices=['compare','select','verify_selected'],required=True)
-    candidates.add_argument('--candidate-id')
-    revise = commands.add_parser('revise',help='模型复核当前稿件，只返修问题段落并核验改动；会调用API')
+    verify = commands.add_parser('verify',help='严格核验当前稿并定向返修；会调用模型')
+    verify.add_argument('--project',required=True)
+    revise = commands.add_parser('revise',help='按事件润色当前稿，可选先分析；会调用API')
     revise.add_argument('--project',required=True)
     memory = commands.add_parser('memory',help='重新生成并核对本话摘要和人物更新；不改正文，会调用模型')
     memory.add_argument('--project',required=True)
@@ -71,14 +68,21 @@ if __name__ == "__main__":
     context.add_argument('--background-file',type=Path,required=True)
     context.add_argument('--characters-file',type=Path,required=True)
     context.add_argument('--revision',default=None,help='已有资料的当前版本号，防止覆盖并发修改')
-    for command in (load,run,integrate,revise,memory,candidates):
+    for command in (load,run,integrate,revise,memory,verify):
         command.add_argument('--chapter',type=int,default=1)
+    for command in (run,revise):
+        command.add_argument('--polish-options',type=Path,help='第四阶段风格参数JSON文件')
     preview = commands.add_parser('preview',help='用现有草稿生成待审核样片，不改变人工审核状态')
     preview.add_argument('--project',required=True)
     preview.add_argument('--output',type=Path)
     preview.add_argument('--rate',default='+25%')
     preview.add_argument('--offline',action='store_true',help='只使用已缓存音频；不调用模型和配音API')
     args = parser.parse_args()
+    options = None
+    if getattr(args,'polish_options',None):
+        import json
+        from pipeline.narration_polish import polish_options
+        options = polish_options(json.loads(args.polish_options.read_text(encoding='utf-8-sig')))
     if args.command == "import":
         imported = import_chapter(args.project, args.source, args.panels,args.chapter)
         print(f"已只读导入 {len(imported['panels'])} 张图片，类型：{imported['input_kind']}")
@@ -95,28 +99,26 @@ if __name__ == "__main__":
         state = store.read()
         if not state["bible"]:
             state = pipeline.analyze(imported["panels"], state["revision"], report)
-        state = pipeline.generate(state["revision"], args.style, args.max_events, report,args.candidate_count)
-        print(f"候选已保存，请比较并选定后严格核验：{state['revision']}")
+        state = pipeline.generate(state["revision"], args.style, args.max_events, report, options)
+        print(f"单稿已保存，请严格核验后人工审核：{state['revision']}")
     elif args.command == 'integrate':
         from pipeline.story_model import StoryModel
         from pipeline.story_pipeline import StoryPipeline
         store = story_store(args.project, args.chapter)
         state = StoryPipeline(store, StoryModel(store)).integrate(store.read()['revision'])
         print(f"本话事件整合已保存，未生成讲稿：{state['revision']}")
-    elif args.command == 'candidates':
+    elif args.command == 'verify':
         from pipeline.story_model import StoryModel
         from pipeline.story_pipeline import StoryPipeline
         store = story_store(args.project,args.chapter)
-        pipeline = StoryPipeline(store,StoryModel(store))
-        method = getattr(pipeline,args.action)
-        state = method(store.read()['revision'],args.candidate_id) if args.action=='select' else method(store.read()['revision'])
-        print(f"候选操作已保存：{state['revision']}；选定不等于核验或人工通过")
+        state = StoryPipeline(store,StoryModel(store)).verify(store.read()['revision'])
+        print(f"当前稿核验已保存，等待人工审核：{state['revision']}")
     elif args.command == 'revise':
         from pipeline.story_model import StoryModel
         from pipeline.story_pipeline import StoryPipeline
         store = story_store(args.project,args.chapter)
-        state = StoryPipeline(store,StoryModel(store)).revise(store.read()['revision'])
-        print(f"定向返修已保存，等待人工审核：{state['revision']}")
+        state = StoryPipeline(store,StoryModel(store)).revise(store.read()['revision'],options)
+        print(f"趣味性润色已处理，待严格核验与人工审核：{state['revision']}")
     elif args.command == 'memory':
         from pipeline.story_model import StoryModel
         from pipeline.story_pipeline import StoryPipeline

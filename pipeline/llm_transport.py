@@ -168,9 +168,11 @@ class OpenAICompatTransport(BaseTransport):
             "model": model,
             "stream": False,
             "messages": messages,
-            "temperature": temperature,
-            "top_p": top_p,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if top_p is not None:
+            payload["top_p"] = top_p
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if repeat_penalty is not None:

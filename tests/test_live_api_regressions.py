@@ -11,8 +11,8 @@ from pipeline.story_model import StoryModel, EvidenceImage
 from pipeline.chapter_memory import merge_memory_patches
 from pipeline.script_writer import ScriptWriter
 from pipeline.story_pipeline import StoryPipeline
-from pipeline.narration_review import review_ready
-from test_engagement_flow import review_payload
+from pipeline.narration_review import polish_ready
+from test_engagement_flow import polish_payload
 from pipeline.llm_transport import OpenAICompatTransport
 from test_character_introduction import panel
 
@@ -115,21 +115,3 @@ def test_memory_revision_preserves_supported_facts_and_allows_removing_failed_cl
     assert merge_memory_patches(old,claims,review,[{'claim_id':'M2','replacement':None}])==revised
     revised['summary'][0]['text']='顺带改写正确摘要'
     with pytest.raises(StoryError,match='正确条目'):merge_memory_patches(old,claims,review,[{'claim_id':'M0','replacement':revised['summary'][0]}])
-
-
-def test_invalid_review_citation_is_retried_without_rewriting_the_draft():
-    segments=[{'segment_id':'S_A','event_id':'A','text':'河水上涨，桥边的人拉住绳索。'}]
-    bible={'characters':[],'panels':[{'source_panel_id':'1','sha256':'source','order':0}],
-           'events':[{'event_id':'A','source_panel_ids':['1']}]}
-    plan={'beats':[{'event_id':'A'}]};calls=[]
-    class Model:
-        def ask(self,stage,prompt,images=None,fresh=False):
-            assert stage=='script_review'
-            calls.append(fresh)
-            raw=review_payload(segments,['A'])
-            if not fresh:raw['content_checks'][0]['citations'][0]['text']='不存在的引文'
-            else:assert '上一份复核响应未通过校验' in prompt
-            return raw
-    before=copy.deepcopy(segments)
-    review=StoryPipeline._review(ScriptWriter(Model()),{'bible':bible,'plan':plan},segments)
-    assert calls==[False,True] and segments==before and review_ready(review,bible,plan,segments)

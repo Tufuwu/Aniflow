@@ -4,9 +4,6 @@ window.StoryReview = (() => {
   const labels = {pending:'待人工审核', approved:'已审核 · 已锁定', rejected:'已驳回',
     passed:'事实核验通过', issues:'发现事实问题', uncertain:'存在不确定内容', unavailable:'核验未完成',
     unsupported:'无来源依据', character_confusion:'人物混淆', event_contradiction:'事件矛盾', wrong_causality:'错误因果'};
-  const assessmentLabels = {entry_context:'必要背景', concrete_focus:'具体关注点', follow_through:'后续承接',
-    purpose:'背景作用', placement:'背景位置与揭示顺序', listener_tracking:'听者辨认人物',
-    identity_timing:'身份揭晓位置', grounded_labels:'称呼依据', oral_delivery:'口头讲述'};
   const eventKinds = {current_action:'当前行动', world_rule:'世界规则或限制', recollection:'回忆',
     historical_explanation:'历史说明', unresolved:'尚未归并', non_story:'非剧情'};
   const eventStates = {supported:'已有分析支持', uncertain:'尚不确定', unknown:'未知', conflicting:'存在矛盾', needs_history:'待补历史'};
@@ -15,7 +12,11 @@ window.StoryReview = (() => {
   let host, project, state, timer, chapter = 1, viewRevision = null, busy = false, generation = 0;
   const drafts = new Map();
   const noteDrafts = new Map();
-  const draftKey = sid => `${project}/${chapter}/${state?.selected_candidate_id || 'legacy'}/${sid}`;
+  const polishDrafts = new Map();
+  const polishDefaults = {humor_percent:35, suspense:'medium', narrative_style:'commentary', length:'storytelling', analyze_first:false};
+  const legacyPolishDefaults = {humor_percent:25, suspense:'medium', narrative_style:'immersive', length:'balanced', analyze_first:false};
+  const polishKey = () => `${project}/${chapter}`;
+  const draftKey = sid => `${project}/${chapter}/${state?.script?.generation_basis || state?.plan?.bible_id || 'script'}/${sid}`;
   const endpoint = () => `/api/story/${encodeURIComponent(project)}` + (chapter === 1 ? '' : `/chapters/${chapter}`);
   async function json(url, options) {
     const response = await fetch(url, options);
@@ -56,12 +57,20 @@ window.StoryReview = (() => {
   function draw() {
     if (!isMounted()) return;
     const bible = state.bible, script = state.script;
+    const polish = script?.narrative_review?.engagement_polish;
     const locked = (script?.segments || []).some(s => s.review_status === 'approved');
     const readOnly = Boolean(viewRevision) || busy;
     const notes = noteDrafts.get(project) || state.series_notes || {};
+    const upgradePolishDefaults = !viewRevision && (polish?.prompt_version || 0) < 5 &&
+      Object.entries(legacyPolishDefaults).every(([key,value]) => script?.polish_options?.[key] === value);
+    const polishOptions = (!viewRevision && polishDrafts.get(polishKey())) ||
+      (upgradePolishDefaults ? polishDefaults : script?.polish_options) || polishDefaults;
+    const polishSelect = (key, title, choices) => `<label>${title} <select data-polish-option="${key}" ${readOnly || locked ? 'disabled' : ''}>
+      ${choices.map(([value,label]) => `<option value="${esc(value)}" ${String(polishOptions[key]) === String(value) ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+      </select></label>`;
     host.innerHTML = `<section class="story-review">
       <h2>剧情理解与中文解说 · 第${chapter}话</h2>
-      <p>一次图片分析 → 本话信息整合与事件还原 → 叙事规划 → 多候选写稿与文字比较 → 人选定 → 严格原图核验 → 人工审核。</p>
+      <p>一次图片分析 → 本话信息整合与事件还原 → 叙事规划 → 单稿写作与趣味性润色 → 严格原图核验 → 人工审核。</p>
       ${state.input?.kind === 'raw_slices' ? `<p class="story-warning">已保留 ${state.input.count} 张原始切片。请先在 AniFlow 完成拼接、分镜检查，或导入确认后的完整分镜。</p>` : ''}
       ${state.input?.kind === 'detected_panels' ? '<p class="story-warning">来源区域已保留整话内容，可先预分析和写草稿。请检查阅读顺序、截断和遗漏；确认分镜后才能审核锁定。</p>' : ''}
       ${viewRevision ? '<p class="story-warning">正在查看历史版本，只读。返回最新版本后可继续审核。</p>' : ''}
@@ -74,22 +83,12 @@ window.StoryReview = (() => {
         ${state.input?.kind === 'raw_slices' ? `<button class="btn btn-secondary" data-action="prepare" ${readOnly ? 'disabled' : ''}>拼接并检测分镜</button>` : ''}
         ${state.input?.kind === 'detected_panels' ? `<button class="btn btn-secondary" data-action="confirm_panels" ${readOnly ? 'disabled' : ''}>已核对分镜完整与阅读顺序</button>` : ''}
         <button class="btn btn-secondary" data-action="integrate" ${readOnly || locked || !bible ? 'disabled' : ''}>本话信息整合与事件还原</button>
-        <button class="btn btn-primary" data-action="generate" ${readOnly || locked || !bible ? 'disabled' : ''}>生成 / 补充候选</button>
-        <select data-candidate-count aria-label="候选总数"><option value="2">2份候选</option><option value="3">3份候选</option></select>
-        <button class="btn btn-secondary" data-action="revise" ${readOnly || locked || !script?.segments?.length ? 'disabled' : ''}>检查当前稿并定向返修</button>
+        <button class="btn btn-primary" data-action="generate" ${readOnly || locked || !bible ? 'disabled' : ''}>生成解说稿</button>
+        <button class="btn btn-secondary" data-action="verify" ${readOnly || locked || !script?.segments?.length ? 'disabled' : ''}>严格核验当前稿并定向返修</button>
+        <button class="btn btn-secondary" data-action="revise" ${readOnly || locked || !script?.segments?.length ? 'disabled' : ''}>口播编剧重写</button>
         <button class="btn btn-ghost" data-action="refresh" ${busy ? 'disabled' : ''}>返回最新 / 刷新</button>
         ${script ? `<a class="btn btn-secondary" href="${endpoint()}/export" target="_blank" rel="noopener">导出最新文案与证据索引</a>` : ''}
       </div>
-      ${(state.candidates || []).length ? `<details class="story-details" open><summary>候选稿 · 选定仅确定核验对象</summary>
-        <p>${esc(state.candidate_comparison?.reason || '等待文字比较')} · 推荐 ${esc(state.candidate_comparison?.recommended_candidate_id || '待审')}</p>
-        <button class="btn btn-secondary" data-action="candidates/compare" ${readOnly ? 'disabled' : ''}>重新比较</button>
-        <button class="btn btn-primary" data-action="candidates/verify_selected" ${readOnly || locked || !state.selected_candidate_id ? 'disabled' : ''}>严格核验选中稿并定向返修</button>
-        ${(state.candidates || []).map(c => `<article><strong>${esc(c.candidate_id)} · ${esc(c.status)} ${state.selected_candidate_id === c.candidate_id ? '· 已选定' : ''}</strong>
-          <p>${esc(c.error || '')}</p>${c.script.segments.map(s => `<p>${esc(s.text)}</p>`).join('')}
-          <button class="btn btn-secondary" data-review-candidate="${esc(c.candidate_id)}" ${readOnly || !c.script.segments.length ? 'disabled' : ''}>重新文字复核</button>
-          <button class="btn btn-secondary" data-select-candidate="${esc(c.candidate_id)}" ${readOnly || locked || !c.script.segments.length ? 'disabled' : ''}>选定此稿</button>
-          ${(state.candidate_comparison?.candidates || []).filter(r => r.candidate_id === c.candidate_id).map(r => `<p>优点：${esc(r.strengths)}<br>问题：${esc(r.problems)}<br>事实风险：${esc(r.fact_risks)}<br>${r.citations.map(q => esc(q.text)).join('；')}</p>`).join('')}
-        </article>`).join('')}</details>` : ''}
       <p data-story-message role="status" aria-live="polite">${busy ? '正在处理，请稍候…' : locked ? '已审核段落受保护，不能编辑或覆盖。' : '所有生成段落都需要人工确认。'}</p>
       <details class="story-details"><summary>生成前资料 · 漫画背景与主要人物</summary>
         <p>供本项目各话生成前参考，事实与人物对应仍会核对原图。更新资料不会改写旧稿或历史版本。</p>
@@ -133,12 +132,22 @@ window.StoryReview = (() => {
       ${state.plan ? `<details class="story-details"><summary>叙事规划 · ${state.plan.beats.length} 个关键事件</summary>
         <p>开场 ${esc(state.plan.opening_event_id)} → 高潮 ${esc(state.plan.climax_event_id)} → 结尾 ${esc(state.plan.ending_event_id)}</p>
         <p>${esc(state.plan.ending_rule)}；${esc(state.plan.budget_note)}</p>
-        ${script?.narrative_review ? `<p class="story-status">故事连贯性：${script.narrative_review.passed && !script.narrative_review.issues.length ? '复核通过' : '需要调整'}</p>${script.narrative_review.issues.map(i => `<p class="story-warning">${esc(typeof i === 'string' ? i : i.detail || JSON.stringify(i))}</p>`).join('')}` : ''}
         ${state.plan.beats.map(b => `<p>${esc((b.event_ids || [b.event_id]).join('、'))} · ${esc(b.title || b.section)} · ${esc(b.reason)}</p>`).join('')}
       </details>` : ''}
-      ${script ? `<p class="story-status">逐段新增信息与语义重复：${script.narrative_review?.information_review?.status === 'reviewed' ? '已复核，请结合具体意见审核' : '尚未完成专门复核'}</p>` : ''}
-      ${script?.narrative_review?.error ? `<p class="story-warning">整稿复核未完成：${esc(script.narrative_review.error)}</p>` : ''}
-      ${script ? `<details class="story-details"><summary>叙事内容检查 · ${script.narrative_review?.content_review?.status === 'reviewed' && script.narrative_review.content_review.version >= 2 ? '已复核，仍需人工确认' : '尚未完成当前检查'}</summary><p>${esc(script.narrative_review?.content_review?.reason || '')}</p>${(script.narrative_review?.content_review?.checks || []).map(c => `<p>${esc(({opening:'开场背景与关注点',turns:'态度转折与触发信息',exposition:'背景与当前行动',references:'人物称呼与可辨认性',action:'行动变化与口头讲述',emotion:'情绪兑现与停顿',ending:'结果与下一步目标'})[c.aspect] || c.aspect)}：${esc(c.verdict === 'issues' ? '需调整' : c.verdict === 'not_applicable' ? '原作无此场面' : '模型复核通过')} · ${esc(c.detail)}${Object.entries(c.assessments || {}).map(([key, value]) => `<br>${esc(assessmentLabels[key] || key)}：${esc(value)}`).join('')}</p>`).join('')}</details>` : ''}
+      <details class="story-details"><summary>第四阶段 · 口播编剧重写</summary>
+        <div class="story-toolbar">
+          ${polishSelect('humor_percent','幽默倾向',[[0,'0%'],[10,'10%'],[25,'25%'],[40,'40%'],[50,'50%']].concat(
+            [0,10,25,40,50].includes(polishOptions.humor_percent) ? [] : [[polishOptions.humor_percent,`${polishOptions.humor_percent}%`]]))}
+          ${polishSelect('suspense','悬念',[['low','自然'],['medium','适中'],['high','较强']])}
+          ${polishSelect('narrative_style','叙述',[['immersive','沉浸讲故事'],['commentary','旁白吐槽'],['fast_paced','快节奏']])}
+          ${polishSelect('length','篇幅',[['storytelling','完整解说 150%–250%'],['concise','精简 80%–100%'],['balanced','均衡 100%–125%'],['expanded','扩写 125%–150%']])}
+          <label><input type="checkbox" data-polish-option="analyze_first" ${polishOptions.analyze_first ? 'checked' : ''} ${readOnly || locked ? 'disabled' : ''}>先设计包袱和节奏（增加一次模型调用）</label>
+        </div>
+        <p>按完整解说示范重写，展开反差、旁白吐槽和口播停顿。篇幅为参考范围；修改参数后点击按钮生效。</p>
+      </details>
+      ${script ? `<details class="story-details"><summary>趣味性润色 · ${polish?.version === 1 && polish.status === 'completed' ? '已完成' : '尚未完成或正文已更新'}</summary>
+        <p>${polish?.status === 'completed' ? (polish.changed_event_ids.length ? `直接修改 ${polish.changed_event_ids.length} 段，其余原文保留。` : '本次保持原稿，无需修改。') : esc(script.narrative_review?.error || '可按需直接润色当前稿。')}</p>
+      </details>` : ''}
       <div class="story-segments">${(script?.segments || []).map(segment => {
         const approved = segment.review_status === 'approved', check = segment.fact_check;
         const primary = [...new Set(bible.events.filter(e => (segment.event_ids || [segment.event_id]).includes(e.event_id)).flatMap(e => e.source_panel_ids))];
@@ -162,13 +171,17 @@ window.StoryReview = (() => {
           </div></article>`;
       }).join('')}</div>
     </section>`;
-    host.querySelectorAll('[data-review-candidate]').forEach(button => button.onclick = () =>
-      run('candidates/review_candidate',{candidate_id:button.dataset.reviewCandidate}).catch(e => message(e.message)));
-    host.querySelectorAll('[data-select-candidate]').forEach(button => button.onclick = () =>
-      run('candidates/select',{candidate_id:button.dataset.selectCandidate}).catch(e => message(e.message)));
     host.querySelectorAll('[data-action]').forEach(button => button.onclick = () => {
       if (button.dataset.action === 'refresh') { viewRevision = null; reload().catch(e => message(e.message)); }
       else run(button.dataset.action).catch(e => message(e.message));
+    });
+    host.querySelectorAll('[data-polish-option]').forEach(input => input.onchange = () => {
+      const options = {...polishOptions};
+      host.querySelectorAll('[data-polish-option]').forEach(control => {
+        const key = control.dataset.polishOption;
+        options[key] = key === 'analyze_first' ? control.checked : key === 'humor_percent' ? Number(control.value) : control.value;
+      });
+      polishDrafts.set(polishKey(),options);
     });
     host.querySelectorAll('[data-series-note]').forEach(area => area.oninput = () => {
       noteDrafts.set(project, {background:host.querySelector('[data-series-note="background"]').value,
@@ -219,18 +232,26 @@ window.StoryReview = (() => {
   }
   async function run(action, payload = {}) {
     if (busy || viewRevision) return;
-    if ((['generate','integrate','analyze','revise','memory'].includes(action) || action.startsWith('candidates/')) && (state.script?.segments || []).some(s => drafts.has(draftKey(s.segment_id)))) {
+    if (['generate','integrate','analyze','verify','revise','memory'].includes(action) && (state.script?.segments || []).some(s => drafts.has(draftKey(s.segment_id)))) {
       message('有尚未保存的旁白修改，请先逐段保存。'); return;
     }
     if (action === 'analyze' && noteDrafts.has(project)) {
       message('有尚未保存的背景或人物资料，请先保存。'); return;
     }
     const style = host.querySelector('[data-story-style]').value;
-    const candidate_count = Number(host.querySelector('[data-candidate-count]').value);
+    if (['generate','revise'].includes(action)) {
+      const options = {};
+      host.querySelectorAll('[data-polish-option]').forEach(input => {
+        const key = input.dataset.polishOption;
+        options[key] = key === 'analyze_first' ? input.checked : key === 'humor_percent' ? Number(input.value) : input.value;
+      });
+      polishDrafts.set(polishKey(),options);
+      payload = {polish_options:options, ...payload};
+    }
     busy = true; draw();
     try {
       const job = await json(`${endpoint()}/${action}`, {method:'POST',
-        headers:{'Content-Type':'application/json'}, body:JSON.stringify({revision:state.revision, style, candidate_count, ...payload})});
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({revision:state.revision, style, ...payload})});
       await poll(job.job_id, generation);
     } catch (error) { busy = false; draw(); throw error; }
   }

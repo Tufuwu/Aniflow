@@ -6,17 +6,21 @@ import math
 from pathlib import Path
 import re
 from uuid import uuid4
+import config
 
 from pipeline.shot_selector import require
 from pipeline.story_bible import atomic_json, digest, StoryError
 from pipeline.voice_director import VoiceDirector, PRESETS, validate_plan, plan_hash
 from pipeline.voice_audio import synthesize_performance, audio_review
+from pipeline.tts_profiles import voice_cache_options
 
 
 def voice_options(options):
     require(isinstance(options, dict) and not (set(options) - {
         "engine", "voice", "model", "rate", "pitch", "speed", "stability", "similarity_boost", "seed"}), "配音参数无效")
-    opts = {"engine": "elevenlabs", "model": "eleven_v4", "voice": "", "rate": "+0%", "pitch": "+0Hz",
+    edge = options.get('engine', 'edge') == 'edge'
+    opts = {"engine": "edge", "model": "eleven_v4", "voice": config.TTS_VOICE if edge else "",
+            "rate": config.TTS_RATE if edge else "+0%", "pitch": config.TTS_PITCH if edge else "+0Hz",
             "speed": 1., "stability": .5, "similarity_boost": .75, **options}
     require(opts["engine"] in {"edge", "elevenlabs"}, "情绪配音目前支持 ElevenLabs 或 Edge 基础预演")
     require(isinstance(opts["voice"], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,120}", opts["voice"]), "请提供有效的声音 ID")
@@ -139,7 +143,7 @@ class VoicePipelineMixin:
                 plans = [VoiceDirector().plan(source, segment, style, False) for style in PRESETS]
             for i, plan in enumerate(plans):
                 validate_plan(plan, segment, source)
-                key = digest({"voice_plan": plan_hash(plan), "options": opts, "version": 1,
+                key = digest({"voice_plan": plan_hash(plan), "options": voice_cache_options(opts), "version": 1,
                               "nonce": uuid4().hex if fresh else None})
                 path = self.store.root / "media" / "audio" / f"{key}.wav"
                 manifest = path.with_suffix(".json")

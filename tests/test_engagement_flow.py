@@ -82,7 +82,11 @@ class StoryFixtureModel:
         if stage == 'shot_select':
             data = json.loads(prompt.split('资料：',1)[1])
             return {'candidates':[{'panel_id':p['panel_id'],'score':.9,'reason':'有动作和人物主体',
-                                   'visual_role':'action','crop':[0,0,1,1]} for p in data['panels']]}
+                                   'visual_role':'action','crop':[0,0,1,1],
+                                   'text_ranges':[] if p.get('context_only') else
+                                       [{'start_char':0,'end_char':len(data['narration']['text']),
+                                         'text':data['narration']['text'],'match_type':'direct','reason':'当前事件画面'}]}
+                                  for p in data['panels']]}
         if stage == 'visual_review':
             data = json.loads(prompt.split('资料：',1)[1])
             return {'checks':[{'panel_id':pid,'usable':True,'reason':'主体和动作完整'} for pid in data['panels']]}
@@ -324,7 +328,8 @@ def test_offline_preview_cache_miss_never_calls_speech_or_model(story,tmp_path):
 def test_offline_preview_renders_cached_audio_and_never_changes_review_state(story,tmp_path):
     source = generate(story)
     root = tmp_path/'preview';(root/'audio').mkdir(parents=True)
-    opts = {'engine':'edge','voice':'zh-CN-YunxiNeural','rate':'+25%','pitch':'-2Hz'}
+    from pipeline.tts_profiles import voice_cache_options
+    opts = voice_cache_options({'engine':'edge','voice':'zh-CN-YunxiNeural','rate':'+35%','pitch':'-2Hz'})
     for segment in source['script']['segments']:
         key = digest({'text':segment['text'],'options':opts})
         path = root/'audio'/f'{key}.mp3'

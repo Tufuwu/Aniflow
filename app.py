@@ -2237,7 +2237,10 @@ def generate_voice_preview():
         
         # Generate preview filename
         import hashlib
-        voice_hash = hashlib.md5(f"{engine}_{voice}".encode()).hexdigest()[:8]
+        from pipeline.tts_profiles import voice_cache_options
+        preview_options = voice_cache_options({'engine': engine, 'voice': voice,
+            'rate': config.TTS_RATE, 'pitch': config.TTS_PITCH, 'text': text})
+        voice_hash = hashlib.sha256(json.dumps(preview_options, sort_keys=True).encode()).hexdigest()[:16]
         preview_path = os.path.join(preview_dir, f"preview_{voice_hash}.mp3")
         
         # Check if preview already exists

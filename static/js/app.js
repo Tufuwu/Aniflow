@@ -923,7 +923,7 @@ async function refreshVoiceOptions(engine, preferred) {
   if (preferred && voices.some(v => v.name === preferred)) sel.value = preferred;
   else {
     const remembered = localStorage.getItem('ttsVoice_' + engine);
-    const fallbackDefault = engine === 'edge' ? 'en-US-ChristopherNeural' : null;
+    const fallbackDefault = engine === 'edge' ? 'zh-CN-YunxiNeural' : null;
     const fallbackOk = fallbackDefault && voices.some(v => v.name === fallbackDefault);
     if (remembered && voices.some(v => v.name === remembered)) sel.value = remembered;
     else if (fallbackOk) sel.value = fallbackDefault;
@@ -3318,10 +3318,11 @@ function renderTTSStep() {
             <label class="form-label">Speech Rate</label>
             <select class="form-select" id="ttsRate">
               <option value="-10%">-10% (Slower)</option>
-              <option value="-5%" selected>-5% (Slightly Slower)</option>
+              <option value="-5%">-5% (Slightly Slower)</option>
               <option value="+0%">Normal</option>
               <option value="+5%">+5% (Slightly Faster)</option>
               <option value="+10%">+10% (Faster)</option>
+              <option value="+35%" selected>+35% (Narration default)</option>
             </select>
           </div>
           <div class="form-group">
@@ -3444,6 +3445,8 @@ async function loadVoicesForEngine(engine) {
       }
       voiceSelect.appendChild(option);
     });
+    const preferred = APP.projectData?.settings?.tts_voice || (engine === 'edge' ? 'zh-CN-YunxiNeural' : '');
+    if (Array.from(voiceSelect.options).some(option => option.value === preferred)) voiceSelect.value = preferred;
 
     voiceSelect.disabled = false;
     btnPreview.disabled = false;
@@ -3508,7 +3511,7 @@ async function playVoicePreview() {
         body: JSON.stringify({ 
           engine, 
           voice,
-          text: 'Hello! This is a preview of how I sound. I will be narrating your manhwa recap.'
+          text: '这本来只是一次普通的巡逻。可当他推开那扇门，才发现，整座城市早已空无一人。'
         }),
         signal: controller.signal
       }).finally(() => clearTimeout(timeoutId));
@@ -3621,12 +3624,12 @@ async function runTTS() {
   const settings = {
     pipeline_mode: APP.mode || 'dialogue',
     tts_engine: engine,
-    tts_voice: document.getElementById('ttsVoice')?.value || 'en-US-ChristopherNeural',
+    tts_voice: document.getElementById('ttsVoice')?.value || 'zh-CN-YunxiNeural',
   };
 
   // Add engine-specific settings
   if (engine === 'edge') {
-    settings.tts_rate = document.getElementById('ttsRate')?.value || '-5%';
+    settings.tts_rate = document.getElementById('ttsRate')?.value || '+35%';
     settings.tts_pitch = document.getElementById('ttsPitch')?.value || '-2Hz';
   } else if (engine === 'kokoro') {
     settings.tts_speed = parseFloat(document.getElementById('kokoroSpeed')?.value || '1.0');

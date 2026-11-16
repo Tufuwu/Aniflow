@@ -34,6 +34,10 @@ AniFlow downloads manhwa/webtoon chapters, detects and crops panels using YOLO, 
 
 **配音导演与试听审核**：根据剧情标注逐句语气、重音、语速和额外停顿，支持悬疑、热血、冷面吐槽三种风格，升级 ElevenLabs v4/v3 表演标签，提供多版本试听、人工锁定及已审核配音排轴。详见 [配音导演说明](docs/voice-direction.md)。
 
+**当前文案后续流程**：第四阶段口播编剧重写后，直接人工审核锁定 → 分镜选择与审核 → 配音试听与审核 → 时间轴和视频导出。人工锁定、选镜和导出不再要求先通过模型逐句原图核验。
+
+**可复用 Chrome 网页清图**：在剪辑工作台的“图片清理”中打开程序专用 Chrome，登录 ChatGPT 后，程序上传已选图片、下载清图，并在人工对照审核后用于视频。默认关闭。详见 [GPT 网页清图说明](docs/chatgpt-image-cleanup.md)。
+
 **以故事推进为目标的生成流程**：完整分镜准备、多事件叙事节点、整稿写作、转折完整性检查、看图选镜和实际裁切复核。篇幅随剧情决定，提供只读缓存的离线预览入口。详见 [改造与离线验收范围](docs/engagement-acceptance.md)。
 
 ## ✨ Features

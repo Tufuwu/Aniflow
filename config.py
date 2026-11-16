@@ -83,6 +83,10 @@ STORY_INTEGRATION_MAX_OUTPUT_TOKENS = os.getenv("STORY_INTEGRATION_MAX_OUTPUT_TO
 AUDIO_OUTPUT_DIR             = os.path.join(OUTPUT_DIR, "audio")
 VIDEO_OUTPUT_DIR             = os.path.join(OUTPUT_DIR, "video")
 
+# Reusable visible Chrome profile for optional ChatGPT web image cleanup.
+CHATGPT_BROWSER_DIR = os.getenv("CHATGPT_BROWSER_DIR", os.path.join(OUTPUT_DIR, "browser", "chatgpt"))
+CHATGPT_BROWSER_PORT = int(os.getenv("CHATGPT_BROWSER_PORT", "9225"))
+
 # Ensure directories exist
 for d in [INPUT_DIR, OUTPUT_DIR, MODELS_DIR, TEMP_DIR, ASSETS_DIR, CAST_DIR,
           PROJECTS_DIR,
@@ -162,9 +166,10 @@ Write ONLY the narration text, nothing else."""
 
 # ─── TTS Settings ────────────────────────────────────────────────
 TTS_ENGINE = "edge"  # "edge", "kokoro", or "elevenlabs"
-TTS_VOICE = "en-US-ChristopherNeural"  # Deep male narrator voice
-TTS_RATE = "-5%"  # Slightly slower for drama
+TTS_VOICE = "zh-CN-YunxiNeural"
+TTS_RATE = "+35%"
 TTS_PITCH = "-2Hz"
+TTS_AUDIO_PROFILE = "yunxi_fast_warm_v1"  # Approved faster, fuller narration preset
 
 # Kokoro TTS settings
 KOKORO_MODEL_DIR = os.path.join(BASE_DIR, "models", "kokoro")

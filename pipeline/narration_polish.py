@@ -53,7 +53,7 @@ DEFAULT_POLISH_OPTIONS = {
 LEGACY_POLISH_OPTIONS = {'humor_percent':25,'suspense':'medium','narrative_style':'immersive',
                          'length':'balanced','analyze_first':False}
 LENGTH_RANGES = {'concise':(0.8,1.0), 'balanced':(1.0,1.25), 'expanded':(1.25,1.5),
-                 'storytelling':(1.5,2.5)}
+                 'storytelling':(0.9,1.1)}
 
 
 def saved_polish_options(script):

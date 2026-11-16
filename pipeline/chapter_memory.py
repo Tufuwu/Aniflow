@@ -5,6 +5,7 @@ import re
 from pipeline.story_bible import StoryBible, digest
 from pipeline.story_model import prompt_json, require, text, EvidenceImage
 from pipeline.semantic_grounding import grounded_units
+from pipeline.human_review import manually_approved
 from pipeline.story_context import context_ids, source_ids
 from pipeline.character_identity import identity_source_ids
 from pipeline.prompt_material import script_text, character_index, text_evidence, current_fact_sheet
@@ -58,10 +59,13 @@ def source_ready(state):
     segments = script.get('segments', [])
     if not segments or len(segments)!=len(plan.get('beats', [])):
         return False
-    if not all((s.get('fact_check') or {}).get('status')=='passed' for s in segments):
+    if all(manually_approved(state['bible'], s) for s in segments):
+        return True
+    if not all(manually_approved(state['bible'], s) if s.get('human_review') else
+               (s.get('fact_check') or {}).get('status')=='passed' for s in segments):
         return False
     if plan.get('version', 0)>=5:
-        return all(grounded_units(state['bible'],s) for s in segments)
+        return all(manually_approved(state['bible'], s) or grounded_units(state['bible'],s) for s in segments)
     # Legacy drafts have no structured narrative review; keep their memory pending.
     return False
 

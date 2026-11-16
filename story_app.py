@@ -5,6 +5,7 @@ python story_app.py import --project first-chapter --source <panel-folder> --pan
 python story_app.py serve
 """
 import argparse
+import config
 from pathlib import Path
 
 from flask import Flask
@@ -75,7 +76,7 @@ if __name__ == "__main__":
     preview = commands.add_parser('preview',help='用现有草稿生成待审核样片，不改变人工审核状态')
     preview.add_argument('--project',required=True)
     preview.add_argument('--output',type=Path)
-    preview.add_argument('--rate',default='+25%')
+    preview.add_argument('--rate',default=config.TTS_RATE)
     preview.add_argument('--offline',action='store_true',help='只使用已缓存音频；不调用模型和配音API')
     args = parser.parse_args()
     options = None
@@ -100,7 +101,7 @@ if __name__ == "__main__":
         if not state["bible"]:
             state = pipeline.analyze(imported["panels"], state["revision"], report)
         state = pipeline.generate(state["revision"], args.style, args.max_events, report, options)
-        print(f"单稿已保存，请严格核验后人工审核：{state['revision']}")
+        print(f"口播稿已保存，请直接人工审核锁定：{state['revision']}")
     elif args.command == 'integrate':
         from pipeline.story_model import StoryModel
         from pipeline.story_pipeline import StoryPipeline
@@ -118,7 +119,7 @@ if __name__ == "__main__":
         from pipeline.story_pipeline import StoryPipeline
         store = story_store(args.project,args.chapter)
         state = StoryPipeline(store,StoryModel(store)).revise(store.read()['revision'],options)
-        print(f"趣味性润色已处理，待严格核验与人工审核：{state['revision']}")
+        print(f"口播编剧重写已处理，待人工审核锁定：{state['revision']}")
     elif args.command == 'memory':
         from pipeline.story_model import StoryModel
         from pipeline.story_pipeline import StoryPipeline

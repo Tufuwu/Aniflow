@@ -242,7 +242,7 @@ class StoryModel:
                 and self._stage_model(stage)[0] == 'openai/gpt-6-luna')
 
     def _stage_model(self, stage):
-        vision = stage in {'analyze','reconcile','identity','shot_select','visual_review','chapter_memory_review'}
+        vision = stage in {'analyze','reconcile','identity','shot_select','shot_text_fill','visual_review','chapter_memory_review'}
         return (self.vision_model if vision else self.checker_model if stage=='check' else
                 self.polish_model if stage in {'script_polish','script_polish_analysis'} else
                 self.script_model if stage in {'write','write_story','rewrite_story'} else

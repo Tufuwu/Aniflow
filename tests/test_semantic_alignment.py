@@ -162,6 +162,10 @@ def test_same_stream_records_word_boundaries_once(tmp_path,monkeypatch):
             yield {'type':'WordBoundary','offset':0,'duration':10000000,'text':'灯亮了'}
     monkeypatch.setattr(tts.edge_tts,'Communicate',Communicate)
     monkeypatch.setattr(tts,'_get_audio_duration',lambda path:1.)
+    monkeypatch.setattr(tts,'apply_audio_profile',lambda *args:None)
+    async def inline(function,*args):
+        return function(*args)
+    monkeypatch.setattr(tts.asyncio,'to_thread',inline)
     path=tmp_path/'speech.mp3'
     result=run_mock_stream(tts._generate_speech_edge('灯亮了。',str(path),rate='+25%'))
     assert len(calls)==1 and calls[0]['boundary']=='WordBoundary' and calls[0]['rate']=='+25%'
@@ -246,15 +250,16 @@ def test_targeted_repair_rejects_changes_outside_feedback(mapped):
         ScriptWriter(Model()).revise_story(source['bible'], {'beats':[]}, [other,segment], {'issues':[{'event_id':'E2'}]})
 
 
-def test_approval_still_requires_current_fact_mapping_without_quality_judgment(tmp_path,mapped):
+def test_manual_approval_does_not_require_model_fact_mapping(tmp_path,mapped):
     source,segment,_,_=mapped
     source['plan']={'version':5,'beats':[{'event_id':'E2'}]}
     source['script'].pop('narrative_review',None)
     source['script']['segments'][0]['fact_check'].pop('grounding')
     store=StoryBible(tmp_path/'chapter');state=store.save(source,'legacy_check',None)
-    with pytest.raises(StoryConflict,match='来源尚未关联'):
-        StoryPipeline(store,object()).segment_action(segment['segment_id'],'approve',state['revision'])
-    assert store.read()['script']['segments'][0]['review_status']=='pending'
+    saved = StoryPipeline(store,object()).segment_action(segment['segment_id'],'approve',state['revision'])
+    assert saved['script']['segments'][0]['review_status']=='approved'
+    assert 'grounding' not in saved['script']['segments'][0]['fact_check']
+    assert store.read(state['revision'])['script']['segments'][0]['review_status']=='pending'
 
 
 def test_existing_approved_text_cannot_be_changed_by_whole_draft_revision(tmp_path,mapped):

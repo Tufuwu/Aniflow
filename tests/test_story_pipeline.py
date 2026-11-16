@@ -160,8 +160,9 @@ def test_checker_fails_closed_on_outage_or_missing_sentences(setup_story):
     assert result["status"] == "unavailable"
     s["fact_check"] = result
     state = store.save(state,"outage",state["revision"])
-    with pytest.raises(StoryConflict, match="核验"):
-        pipeline.segment_action(s["segment_id"],"approve",state["revision"])
+    approved = pipeline.segment_action(s["segment_id"],"approve",state["revision"])
+    assert approved['script']['segments'][0]['review_status'] == 'approved'
+    assert approved['script']['segments'][0]['fact_check']['status'] == 'unavailable'
     model.ask = lambda *args, **kwargs: {"sentences":[]}
     assert FactChecker(store,model).check(state["bible"],s)["status"] == "unavailable"
 
@@ -271,12 +272,11 @@ def test_flask_review_end_to_end_and_evidence_access(setup_story, monkeypatch, t
     assert state['script']['segments'] and 'candidates' not in state
     assert not any(stage=='check' for stage,_,_ in model.seen)
     assert all(s['fact_check'] is None for s in state['script']['segments'])
-    wait_job(client,"test",client.post(base+'/verify',json={'revision':state['revision']}))
-    state=client.get(base).get_json()
     sid = state["script"]["segments"][0]["segment_id"]
     assert client.get(base+"/evidence/1").data == Path(panels[0]["path"]).read_bytes()
     assert client.get(base+"/evidence/does-not-exist").status_code == 404
     wait_job(client,"test",client.post(base+f"/segments/{sid}/approve",json={"revision":state["revision"]}))
+    assert not any(stage == 'check' for stage, _, _ in model.seen)
     assert client.post(base+"/generate",json={"revision":state["revision"]}).status_code == 409
     assert client.get(base+"/export").get_json()["segments"][0]["review_status"] == "approved"
     assert client.get(base+"?revision=../../config.py").status_code == 422

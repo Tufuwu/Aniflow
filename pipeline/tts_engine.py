@@ -7,6 +7,7 @@ import config
 from pipeline.story_bible import atomic_json, digest
 from pipeline.kokoro_tts import get_kokoro_tts, KOKORO_AVAILABLE
 from pipeline.elevenlabs_tts import get_elevenlabs_tts, ELEVENLABS_AVAILABLE
+from pipeline.tts_profiles import apply_audio_profile, voice_cache_options
 
 async def _generate_speech_edge(text, output_path, voice=None, rate=None, pitch=None):
     return await _generate_speech_edge_single_stream(text, output_path, voice, rate, pitch)
@@ -17,6 +18,7 @@ async def _generate_speech_edge_single_stream(text, output_path, voice=None, rat
     voice = voice or config.TTS_VOICE
     rate = rate or config.TTS_RATE
     pitch = pitch or config.TTS_PITCH
+    tts_options = voice_cache_options({'engine': 'edge', 'voice': voice, 'rate': rate, 'pitch': pitch})
     import hashlib
     from pathlib import Path
     boundaries = []
@@ -31,6 +33,7 @@ async def _generate_speech_edge_single_stream(text, output_path, voice=None, rat
                 submaker.feed(chunk)
                 boundaries.append({'text':chunk['text'], 'start':chunk['offset']/10000000,
                                    'end':(chunk['offset']+chunk['duration'])/10000000})
+    await asyncio.to_thread(apply_audio_profile, output_path, tts_options.get('audio_profile'))
     try:
         srt_text = submaker.get_srt() if hasattr(submaker, 'get_srt') else submaker.generate_subs()
         with open(subtitle_path, 'w', encoding='utf-8') as f:
@@ -39,7 +42,7 @@ async def _generate_speech_edge_single_stream(text, output_path, voice=None, rat
         print(f"[TTS] Subtitle generation warning: {e}")
         subtitle_path = None
     metadata = {'text_hash':digest(text), 'audio_sha256':hashlib.sha256(Path(output_path).read_bytes()).hexdigest(),
-                'boundaries':boundaries}
+                'boundaries':boundaries, 'tts_options':tts_options}
     atomic_json(Path(output_path).with_suffix('.boundaries.json'), metadata)
     duration = _get_audio_duration(output_path)
     return {'audio_path': output_path, 'subtitle_path': subtitle_path, 'duration': duration, **metadata}
@@ -130,7 +133,19 @@ def generate_all_audio(panels, state, voice=None, rate=None, pitch=None, engine=
         # Use 5-digit panel numbering: panel_00001.mp3
         audio_path = os.path.join(audio_dir, f"panel_{panel_id:05d}.mp3")
 
-        if os.path.exists(audio_path):
+        cached = os.path.exists(audio_path)
+        if cached and engine == 'edge':
+            from pathlib import Path
+            import hashlib
+            expected = voice_cache_options({'engine': 'edge', 'voice': voice or config.TTS_VOICE,
+                'rate': rate or config.TTS_RATE, 'pitch': pitch or config.TTS_PITCH})
+            try:
+                saved = json.loads(Path(audio_path).with_suffix('.boundaries.json').read_text('utf-8'))
+                cached = (saved.get('tts_options') == expected and saved.get('text_hash') == digest(text_content)
+                          and saved.get('audio_sha256') == hashlib.sha256(Path(audio_path).read_bytes()).hexdigest())
+            except (OSError, ValueError):
+                cached = False
+        if cached:
             panel['audio_path'] = audio_path
             panel['audio_duration'] = _get_audio_duration(audio_path)
             audio_metadata.append({
@@ -246,7 +261,7 @@ def _get_audio_duration(audio_path):
         except Exception:
             return 2.0
 
-async def list_voices(language_filter="en"):
+async def list_voices(language_filter=None):
     try:
         # Add timeout to prevent hanging
         voices = await asyncio.wait_for(edge_tts.list_voices(), timeout=5.0)
@@ -257,7 +272,7 @@ async def list_voices(language_filter="en"):
         # Return empty list on failure - Kokoro voices will still be available
         return []
 
-def get_available_voices(language_filter="en"):
+def get_available_voices(language_filter=None):
     try:
         voices = asyncio.run(list_voices(language_filter))
     except Exception as e:

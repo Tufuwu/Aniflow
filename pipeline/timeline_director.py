@@ -8,6 +8,7 @@ import subprocess
 from pipeline.story_bible import StoryError
 from pipeline.shot_selector import require
 from pipeline.semantic_grounding import measured_spans
+from pipeline.shot_text_ranges import mapped_text_units
 
 FPS = 30
 MOTIONS = {"auto", "hold", "zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down"}
@@ -63,7 +64,7 @@ class TimelineDirector:
     def build(self, groups, audio, library):
         by_id = {p["panel_id"]: p for p in library}
         entries, narration, subtitles, cursor = [], [], [], 0
-        semantic_units, semantic_issues = [], []
+        semantic_units, semantic_issues, shot_text_units, shot_text_narration_ids = [], [], [], []
         for group in groups:
             nid = group["narration_id"]
             require(nid in audio, f"缺少旁白音频：{nid}")
@@ -75,17 +76,28 @@ class TimelineDirector:
             for shot in shots:
                 validate_shot(shot)
             units = group.get('semantic_units', [])
+            editorial_units = mapped_text_units(group)
+            use_text_ranges = bool(editorial_units) and not units
+            if use_text_ranges:
+                units = editorial_units
+                shot_text_narration_ids.append(nid)
             spans, problem = measured_spans(units, audio[nid])
             if problem:
+                require(not use_text_ranges, '图片文字范围无法与实测配音对齐：'+problem)
                 semantic_issues.append({'narration_id':nid, 'detail':problem})
             else:
                 scheduled = []
-                require(all(any(s['panel_id'] in u['display_panel_ids'] and u['unit_id'] in s.get('unit_ids', [])
+                require(all(any(s['panel_id'] in u['display_panel_ids'] and
+                                (use_text_ranges or u['unit_id'] in s.get('unit_ids', []))
                                 for u in spans) for s in shots), '所选镜头缺少当前语义单元关联')
+                if use_text_ranges:
+                    require(all(s['duration_frames'] is None or sum(
+                        s['panel_id'] in u['display_panel_ids'] for u in spans)==1 for s in shots),
+                        '跨多个文字范围的镜头请使用自动时长，或先调整范围后再指定时长')
                 for i, span in enumerate(spans):
                     start = round(span['start']*FPS)
                     end = frames if i == len(spans)-1 else round(span['end']*FPS)
-                    matching = [s for s in shots if span['unit_id'] in s.get('unit_ids', [])
+                    matching = [s for s in shots if (use_text_ranges or span['unit_id'] in s.get('unit_ids', []))
                                 and s['panel_id'] in span['display_panel_ids']]
                     require(matching and end-start >= len(matching), '口播语义单元没有可用镜头或时长')
                     fixed = sum(s['duration_frames'] or 0 for s in matching)
@@ -102,8 +114,9 @@ class TimelineDirector:
                         scheduled.append({**deepcopy(s), 'shot_id':s['shot_id']+f':U{i+1}:{j+1}',
                                           'duration_frames':count, 'unit_ids':[span['unit_id']],
                                           'display_event_ids':list(by_id[s['panel_id']]['event_ids'])})
-                    semantic_units.append({**deepcopy(span), 'narration_id':nid,
-                                           'start_frame':cursor+start, 'end_frame':cursor+end})
+                    target_units = shot_text_units if use_text_ranges else semantic_units
+                    target_units.append({**deepcopy(span), 'narration_id':nid,
+                                         'start_frame':cursor+start, 'end_frame':cursor+end})
                 shots = scheduled
             fixed = sum(s["duration_frames"] or 0 for s in shots)
             automatic = [s for s in shots if s["duration_frames"] is None]
@@ -169,15 +182,19 @@ class TimelineDirector:
         return {"fps": FPS, "width": 1080, "height": 1920, "codec": "h264", "total_frames": cursor,
                 "duration": cursor / FPS, "shots": entries, "narration": narration, "subtitles": subtitles,
                 "semantic_units":semantic_units, "semantic_issues":semantic_issues,
-                "subtitle_alignment": "measured_semantic_units" if semantic_units or any(a.get("unit_timings") for a in audio.values()) else "phrase_proportional_to_measured_audio",
-                "subtitle_note": "按实测语义段音频安排字幕；段内按短语分配，非字级强制对齐" if semantic_units or any(a.get("unit_timings") for a in audio.values()) else
+                'shot_text_units':shot_text_units, 'shot_text_narration_ids':shot_text_narration_ids,
+                "subtitle_alignment": "measured_shot_text_ranges" if shot_text_units else "measured_semantic_units" if semantic_units or any(a.get("unit_timings") for a in audio.values()) else "phrase_proportional_to_measured_audio",
+                "subtitle_note": "按图片文字范围和实测配音边界安排字幕；范围内按短语分配" if shot_text_units else "按实测语义段音频安排字幕；段内按短语分配，非字级强制对齐" if semantic_units or any(a.get("unit_timings") for a in audio.values()) else
                                  "短语按实际音频时长分配；不是字级强制对齐", "sync_tolerance": 1 / FPS}
 
 
-def semantic_alignment(timeline):
-    issues = deepcopy(timeline.get('semantic_issues', []))
+def semantic_alignment(timeline, manual_narration_ids=()):
+    manual = set(manual_narration_ids) & {n['narration_id'] for n in timeline['narration']}
+    issues = [deepcopy(i) for i in timeline.get('semantic_issues', []) if i['narration_id'] not in manual]
     for item in timeline['narration']:
         nid = item['narration_id']
+        if nid in manual:
+            continue  # Human-reviewed narration uses the existing measured segment timeline.
         units = [u for u in timeline.get('semantic_units', []) if u['narration_id']==nid]
         if not units:
             issues.append({'narration_id':nid, 'detail':'没有实测的句子—事件—画面对应关系'})
@@ -199,11 +216,12 @@ def semantic_alignment(timeline):
                 issues.append({'narration_id':nid, 'unit_id':u['unit_id'], 'detail':'正文事实缺少区间内展示依据'})
         if boundary != item['end_frame']:
             issues.append({'narration_id':nid, 'detail':'语义区间未覆盖完整配音'})
-    return {'status':'needs_review' if issues else 'aligned', 'issues':issues,
-            'note':'依据模型来源标注与实测边界检查；仍需人工观看确认内容和节奏'}
+    return {'status':'needs_review' if issues else 'manual_review' if manual else 'aligned', 'issues':issues,
+            'note':'人工审核文案按整段实际配音排轴，镜头内容和节奏由人工确认' if manual else
+                   '依据模型来源标注与实测边界检查；仍需人工观看确认内容和节奏'}
 
 
-def validate_timeline(timeline, require_semantic=False):
+def validate_timeline(timeline, require_semantic=False, manual_narration_ids=()):
     cursor = 0
     for shot in timeline["shots"]:
         require(shot["start_frame"] == cursor and shot["end_frame"] > cursor, "时间轴镜头有空洞或重叠")
@@ -226,6 +244,35 @@ def validate_timeline(timeline, require_semantic=False):
         require(sub_cursor == item["end_frame"], "字幕未完整覆盖旁白")
         cursor = item["end_frame"]
     require(cursor == timeline["total_frames"], "旁白未完整覆盖成片")
-    semantic = semantic_alignment(timeline)
-    require(not require_semantic or semantic['status']=='aligned', '句子与镜头语义对应尚未通过：'+str(semantic['issues']))
-    return {"max_audio_visual_error": max_error, "timeline_complete": True, 'semantic_alignment':semantic}
+    semantic = semantic_alignment(timeline, manual_narration_ids)
+    text_alignment = shot_text_alignment(timeline)
+    require(not text_alignment['issues'], '图片与原文范围排轴无效：'+str(text_alignment['issues']))
+    require(not require_semantic or not semantic['issues'], '句子与镜头语义对应尚未通过：'+str(semantic['issues']))
+    return {"max_audio_visual_error": max_error, "timeline_complete": True, 'semantic_alignment':semantic,
+            'shot_text_alignment':text_alignment}
+
+
+def shot_text_alignment(timeline):
+    """Check editorial text intervals separately from factual grounding."""
+    required = timeline.get('shot_text_narration_ids', [])
+    issues = []
+    for nid in required:
+        item = next((n for n in timeline['narration'] if n['narration_id']==nid),None)
+        units = [u for u in timeline.get('shot_text_units',[]) if u['narration_id']==nid]
+        if not item or not units or ''.join(u['text'] for u in units)!=item['text']:
+            issues.append({'narration_id':nid,'detail':'图片文字范围未完整覆盖当前正文'})
+            continue
+        boundary, char_boundary = item['start_frame'], 0
+        for unit in units:
+            if (unit['start_frame']!=boundary or unit['end_frame']<=boundary or
+                    unit['start_char']!=char_boundary or item['text'][unit['start_char']:unit['end_char']]!=unit['text']):
+                issues.append({'narration_id':nid,'detail':'图片文字区间或实测时间不连续'})
+            boundary, char_boundary = unit['end_frame'], unit['end_char']
+            shots = [s for s in timeline['shots'] if s['start_frame']<unit['end_frame'] and s['end_frame']>unit['start_frame']]
+            if not shots or any(s['narration_id']!=nid or s['panel_id'] not in unit['display_panel_ids']
+                                or unit['unit_id'] not in s.get('unit_ids',[]) for s in shots):
+                issues.append({'narration_id':nid,'detail':'图片没有展示在它对应的原文时间范围内'})
+        if boundary!=item['end_frame'] or char_boundary!=len(item['text']):
+            issues.append({'narration_id':nid,'detail':'图片文字区间未覆盖完整配音'})
+    return {'status':'needs_review' if issues else 'aligned' if required else 'not_run','issues':issues,
+            'note':'模型图片文字关联与实测配音边界；不表示完成事实核验'}

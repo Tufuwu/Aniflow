@@ -84,12 +84,11 @@ window.StoryReview = (() => {
         ${state.input?.kind === 'detected_panels' ? `<button class="btn btn-secondary" data-action="confirm_panels" ${readOnly ? 'disabled' : ''}>已核对分镜完整与阅读顺序</button>` : ''}
         <button class="btn btn-secondary" data-action="integrate" ${readOnly || locked || !bible ? 'disabled' : ''}>本话信息整合与事件还原</button>
         <button class="btn btn-primary" data-action="generate" ${readOnly || locked || !bible ? 'disabled' : ''}>生成解说稿</button>
-        <button class="btn btn-secondary" data-action="verify" ${readOnly || locked || !script?.segments?.length ? 'disabled' : ''}>严格核验当前稿并定向返修</button>
         <button class="btn btn-secondary" data-action="revise" ${readOnly || locked || !script?.segments?.length ? 'disabled' : ''}>口播编剧重写</button>
         <button class="btn btn-ghost" data-action="refresh" ${busy ? 'disabled' : ''}>返回最新 / 刷新</button>
         ${script ? `<a class="btn btn-secondary" href="${endpoint()}/export" target="_blank" rel="noopener">导出最新文案与证据索引</a>` : ''}
       </div>
-      <p data-story-message role="status" aria-live="polite">${busy ? '正在处理，请稍候…' : locked ? '已审核段落受保护，不能编辑或覆盖。' : '所有生成段落都需要人工确认。'}</p>
+      <p data-story-message role="status" aria-live="polite">${busy ? '正在处理，请稍候…' : locked ? '已审核段落受保护，不能编辑或覆盖。全部锁定后进入剧情分镜剪辑。' : '第四阶段完成后直接逐段人工审核锁定，再进行分镜、配音、时间轴和视频导出。'}</p>
       <details class="story-details"><summary>生成前资料 · 漫画背景与主要人物</summary>
         <p>供本项目各话生成前参考，事实与人物对应仍会核对原图。更新资料不会改写旧稿或历史版本。</p>
         <label>背景资料<textarea data-series-note="background" rows="4" ${readOnly ? 'readonly' : ''}>${esc(notes.background)}</textarea></label>
@@ -140,7 +139,7 @@ window.StoryReview = (() => {
             [0,10,25,40,50].includes(polishOptions.humor_percent) ? [] : [[polishOptions.humor_percent,`${polishOptions.humor_percent}%`]]))}
           ${polishSelect('suspense','悬念',[['low','自然'],['medium','适中'],['high','较强']])}
           ${polishSelect('narrative_style','叙述',[['immersive','沉浸讲故事'],['commentary','旁白吐槽'],['fast_paced','快节奏']])}
-          ${polishSelect('length','篇幅',[['storytelling','完整解说 150%–250%'],['concise','精简 80%–100%'],['balanced','均衡 100%–125%'],['expanded','扩写 125%–150%']])}
+          ${polishSelect('length','篇幅',[['storytelling','完整解说 90%–110%'],['concise','精简 80%–100%'],['balanced','均衡 100%–125%'],['expanded','扩写 125%–150%']])}
           <label><input type="checkbox" data-polish-option="analyze_first" ${polishOptions.analyze_first ? 'checked' : ''} ${readOnly || locked ? 'disabled' : ''}>先设计包袱和节奏（增加一次模型调用）</label>
         </div>
         <p>按完整解说示范重写，展开反差、旁白吐槽和口播停顿。篇幅为参考范围；修改参数后点击按钮生效。</p>
@@ -160,14 +159,13 @@ window.StoryReview = (() => {
           ${extra.length ? `<details><summary>因果与背景原图（${extra.length}）</summary>${extra.map(pid => `<a href="${evidence(pid)}" target="_blank" rel="noopener"><img src="${evidence(pid)}" alt="背景来源 ${esc(pid)}" loading="lazy"></a>`).join('')}</details>` : ''}
           <small>点击原图放大 · 来源 ${esc(segment.source_panel_ids.join('、'))}</small></div>
           <div class="story-text-column"><p><strong>${esc(segment.event_id)} · ${esc(segment.section)}</strong></p>
-            <p class="story-status">${labels[segment.review_status]} ｜ ${labels[check?.status] || '待核验'}</p>
-            <p class="${check?.grounding?.status === 'mapped' ? 'story-status' : 'story-warning'}">句子与展示来源：${check?.grounding?.status === 'mapped' ? '已关联，仍需核对实际画面' : '尚未确认，整段来源不代表逐句对应'}</p>
-            ${check?.grounding?.units?.length ? `<details><summary>逐句展示依据</summary>${check.grounding.units.map(u => `<p>${esc(u.text)}<br>讲述事件 ${esc(u.event_ids.join('、'))} · 展示来源 ${esc(u.display_panel_ids.join('、'))}</p>`).join('')}</details>` : ''}
+            <p class="story-status">${labels[segment.review_status]}</p>
+            <p>对照左侧原图确认文案，审核通过后锁定，并在选镜工作台审核实际展示画面。</p>
             <textarea aria-label="${esc(segment.segment_id)} 解说稿" rows="4" ${approved || readOnly ? 'readonly' : ''}>${esc(draft)}</textarea>
-            ${draft !== segment.text ? '<p class="story-warning">有未保存修改；以下核验结果对应已保存版本。</p>' : ''}
-            <div class="story-toolbar">${[['edit','保存并核验'],['regenerate','单段重新生成'],['check','重新核验'],['approve','审核通过并锁定'],['reject','驳回']].map(([action,label]) => `<button class="btn btn-secondary" data-segment-action="${action}" ${readOnly || (approved && action !== 'check') || (action === 'approve' && (check?.status !== 'passed' || (state.input && state.input.kind !== 'panels'))) ? 'disabled' : ''}>${label}</button>`).join('')}</div>
-            <div class="story-check">${check?.error ? `<p class="story-warning">${esc(check.error)}</p>` : ''}
-            ${(check?.sentences || []).map(s => `<p><strong>${s.sentence_index + 1}. ${esc(s.text)}</strong><br>${esc(s.verdict === 'supported' ? '有来源依据' : s.verdict === 'issues' ? '存在问题' : '需人工核对')}：${esc(s.evidence || '')}<br>${s.issues.map(i => `${labels[i.type]}：${esc(i.detail)}`).join('<br>')}</p>`).join('')}</div>
+            ${draft !== segment.text ? '<p class="story-warning">有未保存修改，请先保存再审核。</p>' : ''}
+            <div class="story-toolbar">${[['edit','保存修改'],['regenerate','单段重新生成'],['approve','审核通过并锁定'],['reject','驳回']].map(([action,label]) => `<button class="btn btn-secondary" data-segment-action="${action}" ${readOnly || approved || (action === 'approve' && state.input && state.input.kind !== 'panels') ? 'disabled' : ''}>${label}</button>`).join('')}</div>
+            ${check ? `<details class="story-check"><summary>已有模型核验记录（供参考） · ${labels[check.status] || '未知'}</summary>${check.error ? `<p>${esc(check.error)}</p>` : ''}
+            ${(check.sentences || []).map(s => `<p><strong>${s.sentence_index + 1}. ${esc(s.text)}</strong><br>${esc(s.evidence || '')}<br>${(s.issues || []).map(i => `${labels[i.type]}：${esc(i.detail)}`).join('<br>')}</p>`).join('')}</details>` : ''}
           </div></article>`;
       }).join('')}</div>
     </section>`;
@@ -202,7 +200,7 @@ window.StoryReview = (() => {
       const card = button.closest('[data-segment]');
       const segment = state.script.segments.find(s => s.segment_id === card.dataset.segment);
       if (button.dataset.segmentAction !== 'edit' && card.querySelector('textarea').value !== segment.text) {
-        message('此段有尚未保存的修改，请先“保存并核验”。'); return;
+        message('此段有尚未保存的修改，请先“保存修改”。'); return;
       }
       run(`segments/${encodeURIComponent(card.dataset.segment)}/${button.dataset.segmentAction}`,
           {text:card.querySelector('textarea').value}).catch(e => message(e.message));

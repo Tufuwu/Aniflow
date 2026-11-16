@@ -5,7 +5,7 @@ window.VoiceReview = (() => {
   const emotions = {neutral:'平稳',tense:'紧张',surprised:'惊讶',relieved:'释然',excited:'振奋',sad:'低落',sarcastic:'戏谑',serious:'严肃',calm:'平静'};
   const preferences = new Map();
   let capabilities;
-  const ready = state => !state.voice_direction || state.groups.every(g => {
+  const ready = state => !state.voice_direction ? !state.voice_review_required : state.groups.every(g => {
     const plan=state.voice_direction.plans[g.narration_id], id=state.voice_selected?.[g.narration_id];
     const take=state.voice_samples?.[g.narration_id]?.find(t=>t.take_id===id);
     return plan?.review_status==='approved' && take?.review_status==='approved';
@@ -17,7 +17,7 @@ window.VoiceReview = (() => {
   function mount(host, ctx) {
     const {state}=ctx, plans=state.voice_direction?.plans || {}, options=state.voice_options || {};
     if(!preferences.has(ctx.project))preferences.set(ctx.project,{style:state.voice_direction?.style || 'suspense',use_model:true,
-      engine:options.engine || 'elevenlabs',voice:options.voice || '',model:options.model || 'eleven_v4'});
+      engine:options.engine || 'edge',voice:options.voice || (options.engine==='elevenlabs'?'':'zh-CN-YunxiNeural'),model:options.model || 'eleven_v4'});
     const pref=preferences.get(ctx.project), disabled=ctx.disabled() ? 'disabled' : '';
     const choices=(items,value)=>Object.entries(items).map(([id,label])=>`<option value="${id}" ${id===value?'selected':''}>${label}</option>`).join('');
     host.innerHTML=`<section class="voice-intro"><h2>配音导演</h2><p>固定主播风格，逐句调整表演。原稿保持不变，人工修改和审核会锁定对应配音计划。</p>

@@ -1,5 +1,6 @@
 """Render an approved timeline without changing any source image or earlier export."""
 from pathlib import Path
+import hashlib
 import re
 import shutil
 import subprocess
@@ -71,7 +72,7 @@ def inspect_export(path, timeline):
             "audio_duration_error": abs(decoded_audio - timeline["duration"]), "bytes": path.stat().st_size}
 
 
-def render_timeline(store, source, timeline, output_dir, progress=None):
+def render_timeline(store, source, timeline, output_dir, progress=None, display_assets=None):
     validate_timeline(timeline)
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=False)
@@ -82,7 +83,15 @@ def render_timeline(store, source, timeline, output_dir, progress=None):
     # Reuse AniFlow's background compositor; detection/cropping remains in existing modules.
     from pipeline.compositor import _apply_bg_mode
     for i, shot in enumerate(timeline["shots"]):
-        with Image.open(store.evidence_path(panels[shot["panel_id"]])) as opened:
+        panel = panels[shot['panel_id']]
+        path = store.evidence_path(panel)
+        derivative = (display_assets or {}).get(shot['panel_id'])
+        if derivative:
+            path = Path(derivative['path'])
+            require(derivative.get('review_status') == 'approved' and derivative.get('original_sha256') == panel['sha256'],
+                    '清图尚未审核或不属于当前来源')
+            require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == derivative['sha256'], '清图校验失败')
+        with Image.open(path) as opened:
             image = opened.convert("RGB")
             x, y, w, h = shot["crop"]
             box = (round(x * image.width), round(y * image.height),

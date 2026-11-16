@@ -73,12 +73,13 @@ def test_current_script_checks_reused_without_selection_or_automatic_approval(st
     assert not any(hasattr(pipeline,name) for name in ('select','compare','review_candidate','verify_selected'))
 
 
-def test_edit_only_rechecks_changed_text_and_protects_versions_and_human_locks(story):
+def test_edit_defers_to_human_review_and_protects_versions_and_locks(story):
     store,state,model,pipeline=story;grounding_model(story)
     generated=pipeline.generate(state['revision'])
     verified=pipeline.verify(generated['revision']);before=copy.deepcopy(verified)
     changed=pipeline.segment_action('S_E1','edit',verified['revision'],'暴雨还在下，陈默听到送药的消息后开了门。')
-    assert counts(model)['check']==4
+    assert counts(model)['check']==3
+    assert changed['script']['segments'][0]['fact_check'] is None
     assert changed['script']['segments'][1:]==before['script']['segments'][1:]
     assert store.read(before['revision'])==before
     calls=list(model.calls)

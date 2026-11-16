@@ -21,6 +21,7 @@ lxml>=5.0
 curl_cffi>=0.17.0         # Cloudflare-friendly fetching
 cloudscraper>=1.2
 DrissionPage>=4.1      # headless-browser fallback for protected sites
+playwright>=1.50      # attach to the user's persistent AniFlow Chrome for optional GPT web cleanup
 
 # ─── Panel detection (YOLO) ───────────────────────────
 ultralytics>=8.4

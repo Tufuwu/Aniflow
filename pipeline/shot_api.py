@@ -14,6 +14,8 @@ from pipeline.story_bible import StoryError, StoryConflict
 from pipeline.shot_pipeline import ShotEditingPipeline
 from pipeline.timeline_director import validate_shot
 from pipeline.voice_director import PRESETS, EMOTIONS
+from pipeline.chatgpt_browser import ChatGPTBrowser
+from pipeline.image_cleanup import clean_image_path
 
 
 def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
@@ -32,6 +34,15 @@ def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
         else:
             model = None
         return ShotEditingPipeline(store, model, speech, transcriber)
+
+    @bp.get('/api/editing/image-browser')
+    def image_browser():
+        browser=ChatGPTBrowser()
+        return jsonify(browser.check_login() if request.args.get('check')=='1' else browser.status())
+
+    @bp.post('/api/editing/image-browser/open')
+    def open_image_browser():
+        return jsonify(ChatGPTBrowser().open())
 
     @bp.get("/api/editing/voice-capabilities")
     def voice_capabilities():
@@ -83,9 +94,10 @@ def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
         data = request.get_json(silent=True)
         if not isinstance(data, dict) or "revision" not in data:
             raise StoryError("请提交 JSON 对象及剪辑版本号")
-        if data.get("use_model", False) not in (True, False):
+        use_model = data.get('use_model', action == 'voice_plan')
+        if type(use_model) is not bool:
             raise StoryError("模型复核开关无效")
-        svc = service(project, data.get("use_model", action == "voice_plan"))
+        svc = service(project, use_model)
         try:
             with svc.store.lock.acquire(timeout=0):
                 svc._current(data["revision"])
@@ -106,11 +118,17 @@ def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
         def work():
             try:
                 if action == "select":
-                    result = svc.select(data["revision"], data.get("source_revision"), data.get("use_model", False))
+                    result = svc.select(data["revision"], data.get("source_revision"), use_model)
                 elif action == "direct":
                     result = svc.direct(data["revision"], data.get("tts"), progress)
                 elif action == "export":
                     result = svc.export(data["revision"], progress)
+                elif action == 'image_clean':
+                    result = svc.clean_images(data['revision'],data.get('options'),data.get('panel_ids'),
+                                              data.get('fresh',False),progress,feedback=data.get('feedback'),
+                                              watermark_regions=data.get('watermark_regions'),delete_chat_after=data.get('delete_chat_after',False))
+                elif action.startswith('image_review:'):
+                    result = svc.review_clean_image(data['revision'],nid,action.split(':',1)[1])
                 elif action == "voice_plan":
                     result = svc.plan_voice(data["revision"], data.get("style", "suspense"), data.get("use_model", True))
                 elif action == "voice_audition":
@@ -142,6 +160,23 @@ def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
     @bp.post("/api/editing/<project>/export")
     def export(project):
         return start(project, "export")
+
+    @bp.post('/api/editing/<project>/images/clean')
+    def clean_images(project):
+        return start(project,'image_clean')
+
+    @bp.post('/api/editing/<project>/images/<pid>/<action>')
+    def review_image(project,pid,action):
+        if action not in {'approve','keep_original','disable'}:
+            raise StoryError('不支持的清图审核操作')
+        return start(project,'image_review:'+action,pid)
+
+    @bp.get('/api/editing/<project>/images/<pid>')
+    def clean_asset(project,pid):
+        svc=service(project)
+        state=svc.read(request.args.get('revision'))
+        source=svc.source(state)
+        return send_file(clean_image_path(svc.story,source,state,svc.store.root,pid,pending=True),conditional=True)
 
     @bp.post("/api/editing/<project>/groups/<nid>/<action>")
     def review(project, nid, action):
@@ -201,7 +236,10 @@ def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
             return jsonify(error="已选镜头不存在"), 404
         validate_shot(shot)
         panel = next(p for p in source["bible"]["panels"] if p["source_panel_id"] == pid)
-        with Image.open(svc.story.evidence_path(panel)) as image:
+        path = svc.story.evidence_path(panel)
+        if state.get('image_cleanup',{}).get('enabled') and state.get('clean_images',{}).get(pid,{}).get('review_status')=='approved':
+            path=clean_image_path(svc.story,source,state,svc.store.root,pid)
+        with Image.open(path) as image:
             x, y, w, h = shot["crop"]
             cropped = image.crop((round(x * image.width), round(y * image.height),
                                   round((x + w) * image.width), round((y + h) * image.height)))

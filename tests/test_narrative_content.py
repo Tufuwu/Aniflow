@@ -133,7 +133,7 @@ def test_legacy_review_only_resumes_polishing_without_rewriting_the_draft(story)
     assert polish_ready(result['script']['narrative_review'],result['bible'],result['plan'],result['script']['segments'])
 
 
-def test_image_and_human_gates_are_independent_of_a_model_quality_judgment(tmp_path,mapped):
+def test_manual_approval_accepts_drafts_without_model_mapping(tmp_path,mapped):
     source,segment,_,_=mapped;source['plan']={'version':5,'beats':[{'event_id':'E2'}]}
     source['script'].pop('narrative_review',None)
     store=StoryBible(tmp_path/'chapter');saved=store.save(source,'fixture',None)
@@ -141,7 +141,9 @@ def test_image_and_human_gates_are_independent_of_a_model_quality_judgment(tmp_p
     assert approved['script']['segments'][0]['review_status']=='approved'
     ShotEditingPipeline.approved(approved)
     approved['script']['segments'][0]['fact_check'].pop('grounding')
-    with pytest.raises(StoryError,match='来源关联'):ShotEditingPipeline.approved(approved)
+    ShotEditingPipeline.approved(approved)
+    approved['script']['segments'][0]['text'] += '修改。'
+    with pytest.raises(StoryError,match='重新审核'):ShotEditingPipeline.approved(approved)
 
 
 @pytest.mark.parametrize('field,value', [('event_ids',['E1','E2']),('context_event_ids',['E1']),('source_panel_ids',['2'])])

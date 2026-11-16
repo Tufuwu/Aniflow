@@ -70,7 +70,7 @@ def chapter(tmp_path):
 
 def selected(chapter):
     store, source, pipeline = chapter
-    return pipeline.select(None, source['revision'])
+    return pipeline.select(None, source['revision'], use_model=False)
 
 
 def reviewed(chapter):
@@ -123,13 +123,13 @@ def test_manual_crop_selection_order_reasons_and_locks_survive_ai_rerun(chapter)
         {'panel_id':'5','motion':'zoom_out'}]})
     state = pipeline.review(group['narration_id'], 'approve', state['revision'], {})
     locked = copy.deepcopy(state['groups'][1])
-    state = pipeline.select(state['revision'], source['revision'])
+    state = pipeline.select(state['revision'], source['revision'], use_model=False)
     assert state['groups'][1] == locked
     assert originals == {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in originals}
     assert store.read()['revision'] == source['revision']
     assert (store.root / 'revisions' / f"{source['revision']}.json").read_bytes() == source_bytes
     with pytest.raises(StoryConflict):
-        pipeline.select(None, source['revision'])
+        pipeline.select(None, source['revision'], use_model=False)
 
 
 def test_unapproved_text_or_incomplete_milestones_are_blocked(chapter):
@@ -137,12 +137,12 @@ def test_unapproved_text_or_incomplete_milestones_are_blocked(chapter):
     source['script']['segments'][0]['review_status'] = 'pending'
     pending = store.save(source, 'pending', source['revision'])
     with pytest.raises(StoryError, match='审核'):
-        pipeline.select(None, pending['revision'])
+        pipeline.select(None, pending['revision'], use_model=False)
     pending['script']['segments'][0]['review_status'] = 'approved'
     pending['plan']['milestones']['rules'] = 'E404'
     invalid = store.save(pending, 'missing_milestone', pending['revision'])
     with pytest.raises(StoryError, match='里程碑'):
-        pipeline.select(None, invalid['revision'])
+        pipeline.select(None, invalid['revision'], use_model=False)
 
 
 def test_missing_event_evidence_fails_closed(chapter):
@@ -150,7 +150,7 @@ def test_missing_event_evidence_fails_closed(chapter):
     source['bible']['events'][1]['source_panel_ids'] = ['404']
     changed = store.save(source, 'missing_evidence', source['revision'])
     with pytest.raises(StoryError, match='必要剧情'):
-        pipeline.select(None, changed['revision'])
+        pipeline.select(None, changed['revision'], use_model=False)
     assert pipeline.store.read()['revision'] is None
 
 
@@ -262,7 +262,7 @@ def test_api_single_chapter_history_conflict_and_media_access(chapter, monkeypat
     client=app.test_client();base='/api/editing/test'
     assert client.get('/shot-review').status_code==200
     assert client.post(base+'/select',json={}).status_code==422
-    result=wait_job(client,base,client.post(base+'/select',json={'revision':None,'source_revision':source['revision']}))
+    result=wait_job(client,base,client.post(base+'/select',json={'revision':None,'source_revision':source['revision'],'use_model':False}))
     assert result['status']=='completed',result
     state=client.get(base).get_json(); revision=state['revision']
     assert client.get(base+'/evidence/3').status_code==200

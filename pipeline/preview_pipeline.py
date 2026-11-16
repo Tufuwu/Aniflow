@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
+import config
 
 from pipeline.story_bible import atomic_json,digest
 from pipeline.story_model import StoryModel,require
@@ -11,19 +12,21 @@ from pipeline.shot_selector import build_library,ShotSelectorAgent,GlobalShotOpt
 from pipeline.timeline_director import TimelineDirector,audio_duration,validate_timeline
 from pipeline.timeline_compositor import render_timeline
 from pipeline.semantic_grounding import attach_tts_boundaries
+from pipeline.tts_profiles import voice_cache_options
 
 
-def preview_chapter(store, output_root, rate='+25%', offline=False, progress=None, model=None, speech=None):
+def preview_chapter(store, output_root, rate=None, offline=False, progress=None, model=None, speech=None):
     """Offline mode permits only existing verified audio and metadata selection."""
     source = store.read()
     segments = (source.get('script') or {}).get('segments',[])
     require(segments and len(segments)==len(source['plan']['beats']), '请先完成整稿生成')
     root = Path(output_root).resolve()
     root.mkdir(parents=True,exist_ok=True)
-    opts = {'engine':'edge','voice':'zh-CN-YunxiNeural','rate':rate,'pitch':'-2Hz'}
+    opts = {'engine':'edge','voice':config.TTS_VOICE,'rate':rate or config.TTS_RATE,'pitch':config.TTS_PITCH}
+    cache_options = voice_cache_options(opts)
     # Validate before constructing a model or synthesizer.
     import re
-    require(isinstance(rate,str) and re.fullmatch(r'[+-]\d{1,3}%',rate), '语速格式无效')
+    require(isinstance(opts['rate'],str) and re.fullmatch(r'[+-]\d{1,3}%',opts['rate']), '语速格式无效')
     model = None if offline else model or StoryModel(store)
     library = build_library(store,source)
     selector = ShotSelectorAgent(model)
@@ -33,7 +36,7 @@ def preview_chapter(store, output_root, rate='+25%', offline=False, progress=Non
     require(not metrics['missing_by_narration'], '预览缺少剧情画面')
     audio = {}
     for i,g in enumerate(groups):
-        key = digest({'text':g['text'],'options':opts})
+        key = digest({'text':g['text'],'options':cache_options})
         path = root/'audio'/f'{key}.mp3'
         cache = path.with_suffix('.json')
         if path.exists() and cache.exists():
@@ -65,7 +68,7 @@ def preview_chapter(store, output_root, rate='+25%', offline=False, progress=Non
                 'fact_checks':dict(Counter((s.get('fact_check') or {}).get('status','not_run') for s in segments)),
                 'narrative_review':source['script'].get('narrative_review'),
                 'visual_review':visual_review,
-                'timeline':timeline,'groups':groups,'metrics':metrics,'sync':sync,'report':report,'tts':opts}
+                'timeline':timeline,'groups':groups,'metrics':metrics,'sync':sync,'report':report,'tts':cache_options}
     require(store.read()['revision']==source['revision'], '来源已改变；本预览未发布')
     atomic_json(directory/'manifest.json',manifest)
     (directory/'narration.txt').write_text('\n\n'.join(s['text'] for s in segments)+'\n',encoding='utf-8')

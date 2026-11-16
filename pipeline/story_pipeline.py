@@ -16,6 +16,7 @@ from pipeline.event_integration import integrate_chapter, chapter_input
 from pipeline.prompt_material import current_fact_sheet
 from pipeline.fact_material import source_material_basis
 from pipeline.opening_recap import with_opening_recap
+from pipeline.human_review import approve_segment, segment_approved
 
 
 class StoryPipeline:
@@ -174,7 +175,7 @@ class StoryPipeline:
             state = self._save(state,'script_written',state['revision'])
             state = self._polish(state)
             if progress:
-                progress(1,1,'单稿已保存；趣味性润色已处理，待严格原图核验和人工审核')
+                progress(1,1,'口播稿已保存，待人工审核锁定；通过后进入分镜、配音与视频制作')
             return state
 
     def verify(self, expected_revision):
@@ -229,7 +230,8 @@ class StoryPipeline:
                     raise StoryError("请输入1到1000字的旁白")
                 if narration.strip() != segment['text']:
                     segment.update(text=narration.strip(), review_status="pending", fact_check=None)
-                    segment["fact_check"] = self._check(state["bible"], segment)
+                    segment.pop('human_review', None)
+                    state.pop('chapter_memory', None)
             elif action == "regenerate":
                 beat = next(b for b in state["plan"]["beats"] if b["event_id"] == segment["event_id"])
                 idx = script["segments"].index(segment)
@@ -239,29 +241,25 @@ class StoryPipeline:
                     feedback=segment.get("fact_check"),original_text=segment['text'],
                     facts=current_fact_sheet(state['bible'],state['plan'],script))
                 if candidate['text'] != segment['text']:
-                    candidate["fact_check"] = self._check(state["bible"], candidate)
+                    candidate.pop('human_review', None)
                     script["segments"][idx] = candidate
+                    state.pop('chapter_memory', None)
             elif action == "check":
                 segment["fact_check"] = self._check(state["bible"], segment, fresh=True)
             elif action == "approve":
                 if not context_current(self.store,state['bible']):
                     raise StoryConflict('前话资料已变化，请重新分析核对后再审核本话')
-                if not segment.get("fact_check") or segment["fact_check"]["status"] != "passed":
-                    raise StoryConflict("事实核验尚未通过，请先修正文案或补充剧情证据")
-                if state['plan'].get('version',0)>=5:
-                    if not grounded_units(state['bible'], segment):
-                        raise StoryConflict('当前句子的事实与展示来源尚未关联，请重新核验')
-                segment["review_status"] = "approved"
+                approve_segment(state['bible'], segment)
             elif action == "reject":
                 segment["review_status"] = "rejected"
             else:
                 raise StoryError("不支持的审核操作")
             complete = len(script["segments"]) == len(state["plan"]["beats"])
             state["stage"] = "approved" if complete and all(
-                s["review_status"] == "approved" and (s.get("fact_check") or {}).get("status") == "passed"
+                segment_approved(state['bible'], state['plan'], s)
                 for s in script["segments"]) else "review"
             state = self._save(state, f"{action}:{segment_id}", expected_revision)
-            return self._remember(state) if action in {'edit','regenerate'} else state
+            return state
 
     def revise(self, expected_revision, polish_options=None):
         """Explicit fourth-stage request, optionally preceded by brief analysis."""

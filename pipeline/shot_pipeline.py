@@ -4,16 +4,21 @@ import hashlib
 from pathlib import Path
 import re
 from uuid import uuid4
+import config
 
 from pipeline.story_bible import StoryBible, StoryConflict, StoryError, atomic_json, digest
 from pipeline.shot_selector import (ShotSelectorAgent, GlobalShotOptimizer, build_library,
                                     coverage_report, required_events, require)
 from pipeline.timeline_director import TimelineDirector, audio_duration, validate_shot, validate_timeline
 from pipeline.voice_pipeline import VoicePipelineMixin
-from pipeline.semantic_grounding import attach_tts_boundaries, grounded_units
+from pipeline.semantic_grounding import attach_tts_boundaries
+from pipeline.human_review import manually_approved, segment_approved
+from pipeline.shot_text_ranges import build_mapping, mapped_text_units, validate_ranges, validate_context_ranges
+from pipeline.tts_profiles import voice_cache_options
+from pipeline.image_cleanup import ImageCleanupMixin, display_assets
 
 
-class ShotEditingPipeline(VoicePipelineMixin):
+class ShotEditingPipeline(ImageCleanupMixin, VoicePipelineMixin):
     def __init__(self, story_store, model=None, speech=None, transcriber=None):
         require(story_store.root.name == "Chapter_00001", "当前仅支持单话验证，不支持批量章节")
         self.story = story_store
@@ -28,11 +33,8 @@ class ShotEditingPipeline(VoicePipelineMixin):
         require(source.get("bible") and segments and beats, "请先完成剧情分析与解说稿")
         require(len(segments) == len(beats) and len({s["segment_id"] for s in segments}) == len(segments)
                 and {s["event_id"] for s in segments} == {b["event_id"] for b in beats}, "文案与事件规划不完整")
-        require(all(s.get("review_status") == "approved" and
-                    (s.get("fact_check") or {}).get("status") == "passed" for s in segments),
-                "所有解说段落必须先通过事实核验与人工审核")
-        if source['plan'].get('version',0) >= 5:
-            require(all(grounded_units(source['bible'],s) for s in segments), '缺少当前句子的事实与展示来源关联')
+        require(all(segment_approved(source['bible'], source['plan'], s) for s in segments),
+                "所有解说段落必须先人工审核锁定；文案或来源变化后需重新审核")
         # A milestone must be in a narrated event or its explicit causal context.
         required = {e for s in segments for e in required_events(source, s)}
         milestones = {eid for eid in (source["plan"].get("milestones") or {}).values() if eid}
@@ -63,6 +65,11 @@ class ShotEditingPipeline(VoicePipelineMixin):
         return source
 
     @staticmethod
+    def manual_narration_ids(source):
+        return [s['segment_id'] for s in source['script']['segments']
+                if manually_approved(source['bible'], s)]
+
+    @staticmethod
     def invalidate(state):
         state.update(timeline=None, export=None, stage="shot_review")
 
@@ -87,7 +94,8 @@ class ShotEditingPipeline(VoicePipelineMixin):
             unlocked = [g for g in groups if not g.get('locked')]
             visual_review = selector.review_selected(source,library,unlocked) if unlocked else {'status':'human_locked'}
             state.update(library=library, groups=groups, metrics=coverage_report(groups, library),
-                         selector="metadata+model" if use_model else "evidence_metadata", visual_review=visual_review)
+                         selector="metadata+model" if use_model else "evidence_metadata", visual_review=visual_review,
+                         voice_review_required=bool(self.manual_narration_ids(source)))
             self.invalidate(state)
             return self.store.save(state, "select_shots", revision)
 
@@ -114,6 +122,13 @@ class ShotEditingPipeline(VoicePipelineMixin):
                     for field in ("crop", "motion", "transition", "duration_frames"):
                         if field in item:
                             shot[field] = item[field]
+                    if 'text_mapping' in group:
+                        row = next(r for r in group['decisions'] if r['panel_id']==pid)
+                        shot['text_ranges'] = validate_ranges(group['text'], item.get('text_ranges',
+                            shot.get('text_ranges',row.get('text_ranges',[]))))
+                        for key in ('context_only','context_origins'):
+                            shot[key] = deepcopy(row.get(key,False if key=='context_only' else []))
+                        validate_context_ranges(group['text'],shot['text_ranges'],shot)
                     validate_shot(shot)
                     panel = next(p for p in state["library"] if p["panel_id"] == pid)
                     require(round(shot["crop"][2] * panel["width"]) >= 1 and
@@ -123,12 +138,15 @@ class ShotEditingPipeline(VoicePipelineMixin):
                         shot['unit_ids'] = [u['unit_id'] for u in group['semantic_units'] if pid in u['display_panel_ids']]
                     selected.append(shot)
                 group.update(selected=selected, locked=True, review_status="pending")
+                if 'text_mapping' in group:
+                    group['text_mapping'] = build_mapping(group,version=2)
                 report = coverage_report(state["groups"], state["library"])
                 require(not report["missing_by_narration"] and not report['missing_semantic_units'],
                         "不能删除必要剧情画面；请先补足本句关键事件证据")
                 for row in group["decisions"]:
                     row.update(selected=row["panel_id"] in seen, reason="人工选择并锁定" if row["panel_id"] in seen else "人工排除并锁定镜头组")
             elif action == "approve":
+                mapped_text_units(group)
                 group.update(locked=True, review_status="approved")
                 for shot in group["selected"]:
                     shot["locked"] = True
@@ -147,18 +165,21 @@ class ShotEditingPipeline(VoicePipelineMixin):
     def direct(self, revision, options=None, progress=None):
         with self.store.lock:
             state = self._current(revision)
-            self.source(state)
+            source = self.source(state)
             require(state.get("groups"), "请先选择镜头")
+            require(not self.manual_narration_ids(source) or state.get('voice_direction'),
+                    '请先完成配音试听与审核，再安排时间轴')
             if state.get("voice_direction"):
                 audio = self.accepted_voice_audio(state)
                 timeline = TimelineDirector().build(state["groups"], audio, state["library"])
                 state.update(audio=audio, timeline=timeline, export=None, stage="timeline_review")
-                state["sync"] = validate_timeline(timeline)
+                state["sync"] = validate_timeline(timeline, manual_narration_ids=self.manual_narration_ids(source))
                 return self.store.save(state, "direct_reviewed_voice", revision)
             options = options or {}
             require(isinstance(options, dict) and not (set(options) - {"engine", "voice", "rate", "pitch", "speed"}),
                     "语音参数无效")
-            opts = {"engine": "edge", "voice": "zh-CN-YunxiNeural", "rate": "+0%", "pitch": "+0Hz", "speed": 1., **options}
+            opts = {"engine": "edge", "voice": config.TTS_VOICE, "rate": config.TTS_RATE,
+                    "pitch": config.TTS_PITCH, "speed": 1., **options}
             require(opts["engine"] in {"edge", "kokoro", "elevenlabs"}, "不支持的 TTS 引擎")
             require(isinstance(opts["voice"], str) and 0 < len(opts["voice"]) <= 120, "语音名称无效")
             for field, pattern in (("rate", r"[+-]\d{1,3}%"), ("pitch", r"[+-]\d{1,3}Hz")):
@@ -166,7 +187,7 @@ class ShotEditingPipeline(VoicePipelineMixin):
             require("speed" not in opts or type(opts["speed"]) in (int, float) and .25 <= opts["speed"] <= 4, "语速无效")
             audio = {}
             for i, group in enumerate(state["groups"]):
-                key = digest({"text": group["text"], "options": opts, "version": 1})
+                key = digest({"text": group["text"], "options": voice_cache_options(opts), "version": 1})
                 path = self.store.root / "media" / "audio" / f"{key}.mp3"
                 manifest = path.with_suffix(".json")
                 if not (path.exists() and manifest.exists()):
@@ -182,7 +203,7 @@ class ShotEditingPipeline(VoicePipelineMixin):
                         result = speech(group["text"], str(temporary), **opts)
                         duration = audio_duration(temporary)
                         info = {"duration":duration, "sha256":hashlib.sha256(temporary.read_bytes()).hexdigest(),
-                                "options":opts, "text_hash":digest(group['text'])}
+                                "options":voice_cache_options(opts), "text_hash":digest(group['text'])}
                         info = attach_tts_boundaries(info, temporary, group['text'], result)
                         temporary.replace(path)
                         atomic_json(manifest, info)
@@ -199,7 +220,7 @@ class ShotEditingPipeline(VoicePipelineMixin):
                     progress(i + 1, len(state["groups"]), "正在生成或复用实际旁白音频")
             timeline = TimelineDirector().build(state["groups"], audio, state["library"])
             state.update(audio=audio, tts_options=opts, timeline=timeline, export=None, stage="timeline_review")
-            state["sync"] = validate_timeline(timeline)
+            state["sync"] = validate_timeline(timeline, manual_narration_ids=self.manual_narration_ids(source))
             return self.store.save(state, "direct_timeline", revision)
 
     def export(self, revision, progress=None):
@@ -209,24 +230,31 @@ class ShotEditingPipeline(VoicePipelineMixin):
             require(all(g["review_status"] == "approved" for g in state["groups"]), "请先逐段审核镜头选择与裁切")
             require(state.get("timeline"), "请先根据 TTS 音频生成时间轴")
             require(not coverage_report(state["groups"], state["library"])["missing_by_narration"], "存在关键剧情覆盖缺口")
-            validate_timeline(state["timeline"], require_semantic=source['plan'].get('version',0)>=5)
+            validate_timeline(state["timeline"], require_semantic=source['plan'].get('version',0)>=5,
+                              manual_narration_ids=self.manual_narration_ids(source))
             if state.get("voice_direction"):
                 require(self.accepted_voice_audio(state) == state["audio"], "已审核配音已变化，请重新安排时间轴")
+            else:
+                require(not self.manual_narration_ids(source), '请先完成配音试听与审核，再导出视频')
             # Rebuild from immutable inputs so a stale/tampered timeline cannot be exported.
             for audio in state["audio"].values():
                 require(hashlib.sha256(Path(audio["path"]).read_bytes()).hexdigest() == audio["sha256"], "音频内容已变化")
             require(TimelineDirector().build(state["groups"], state["audio"], state["library"]) == state["timeline"],
                     "时间轴已过期，请重新生成")
+            assets = display_assets(self.story, source, state, self.store.root)
             from pipeline.compositor import compose_story_timeline
             export_id = uuid4().hex
             directory = self.store.root / "exports" / export_id
             directory.parent.mkdir(parents=True, exist_ok=True)
-            report = compose_story_timeline(self.story, source, state["timeline"], directory, progress)
+            report = compose_story_timeline(self.story, source, state["timeline"], directory, progress,
+                                           display_assets=assets) if assets else compose_story_timeline(
+                                               self.story, source, state["timeline"], directory, progress)
             result = {"export_id": export_id, "editing_revision": revision, "source_revision": state["source_revision"],
                       "report": report, "metrics": state["metrics"], "sync": state["sync"],
                       "video_sha256": hashlib.sha256((directory / "video.mp4").read_bytes()).hexdigest()}
             atomic_json(directory / "manifest.json", {**result, "timeline": state["timeline"], "groups": state["groups"],
                 "voice_direction": state.get("voice_direction"), "voice_selected": state.get("voice_selected"),
-                "voice_samples": state.get("voice_samples")})
+                "voice_samples": state.get("voice_samples"), "display_assets": assets,
+                "image_cleanup": state.get("image_cleanup")})
             state.update(export=result, stage="exported")
             return self.store.save(state, "export_video", revision)

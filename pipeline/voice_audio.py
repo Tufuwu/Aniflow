@@ -12,6 +12,7 @@ import wave
 from pipeline.shot_selector import require
 from pipeline.timeline_director import ffmpeg_exe
 from pipeline.voice_director import expressive_text
+from pipeline.tts_profiles import voice_cache_options
 
 SAMPLE_RATE = 48000
 
@@ -97,5 +98,6 @@ def synthesize_performance(plan, output_path, options, speech=None):
         # WAV keeps inserted silence and sample boundaries exact. Extension is explicit in the cache manifest.
         target.write_bytes(combined.read_bytes())
     return {"unit_timings": timings, "duration": cursor / SAMPLE_RATE, "sample_rate": SAMPLE_RATE,
+            "audio_profile": voice_cache_options(options).get("audio_profile"),
             "delivery_mode": "expressive_tags" if options["engine"] == "elevenlabs" else "basic_rate_only",
             "note": "额外停顿按样本插入；语义段内部自然停顿与情绪标签需试听确认"}

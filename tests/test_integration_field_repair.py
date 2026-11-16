@@ -171,15 +171,15 @@ def test_unresolved_is_explicit_and_stops_after_one_call_without_partial_commit(
     assert exc.value.issues[0]['path'] == '/events/0/summary' and exc.value.issues[0]['status'] == status
 
 
-def test_missing_entire_event_is_scope_change_without_model_guessing(analysis):
+def test_uncited_entire_event_does_not_trigger_field_repair(analysis):
     fragments = fragments_for(analysis)
     raw = merged_response(analysis)
     raw['events'].pop()
     class Model:
         def ask(self, *args, **kwargs): raise AssertionError('No field can authorize new event placement')
-    with pytest.raises(IntegrationRepairUnresolved, match='遗漏') as exc:
-        repair_integration_result(Model(), raw, analysis, fragments)
-    assert exc.value.issues[0]['status'] == 'requires_scope_change'
+    before = copy.deepcopy(raw)
+    assert repair_integration_result(Model(), raw, analysis, fragments) == consume(raw, analysis, fragments)
+    assert raw == before
 
 
 def test_patch_for_changed_value_is_rejected(analysis):
@@ -263,7 +263,7 @@ def test_field_repair_journal_cache_and_prompt_dependencies_keep_old_results(sto
         calls = []
         def ask(self, stage, prompt, **kwargs):
             self.calls.append(prompt)
-            if 'Event Integration Field Repair v1' in prompt:
+            if 'Event Integration Field Repair v' in prompt:
                 issue = payload(prompt)['issues'][0]
                 return answer(issue, '修正的合成事件梳理')
             result = integration_response(prompt)

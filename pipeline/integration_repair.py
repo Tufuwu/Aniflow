@@ -5,9 +5,9 @@ from pipeline.integration_material import compact_json, model_material
 from pipeline.story_bible import StoryError, digest
 from pipeline.story_model import require
 
-REPAIR_VERSION = 1
+REPAIR_VERSION = 4
 UNRESOLVED = {'insufficient_context', 'insufficient_evidence', 'requires_scope_change'}
-REPAIR_INSTRUCTIONS = '''Event Integration Field Repair v1。你负责修正“本话信息整合与事件还原”结果中的指定字段。
+REPAIR_INSTRUCTIONS = '''Event Integration Field Repair v4。你负责修正“本话信息整合与事件还原”结果中的指定字段，沿用上下文事件还原原则。
 只处理 issues，不重新生成完整章节、完整事件或其他正确字段。
 输入每项含 issue_id、path、current_value、error、expected、fragment_ids、readonly_context。
 path是程序确定的精确字段位置；expected规定返回值的类型、结构及允许值。fragment_ids指定本问题可读取的原片段及精确关联的只读对白依赖。
@@ -15,13 +15,17 @@ fragments列顺序为fragment_columns，通常为[id,kind,source,status,content]
 每个问题只返回该字段的新值，不返回完整事件、path、只读上下文或原始片段。不得修改其他字段、事件顺序、事件归属，不合并或拆分事件。
 不生成或修改event_id、source_panel_ids、causes等程序字段；不能通过标题、关键词、外观或内容相似度猜测来源对应。
 若修正必须修改未授权字段、扩大来源范围或调整事件结构，返回requires_scope_change，不越界修改。
-仅使用本问题允许的片段及只读上下文。保留已有前提、目标、阻碍、行动、反应、结果及必要设定；允许语义归并和自然承接，不为连贯补造事实。
-时间先后不等于因果；人物发言、猜测、回忆不能直接成为当前已确认事实。未知身份、心理、地点、行动结果及历史前提继续保持未知或待补。
-世界规则、危险限制、回忆和历史说明保留性质、原作时间及未知限制，不强行改为当前动作。
-描述是剧情梳理，不写正式口播，不加评价、套话或未来预告。颜色、服装、姿势和构图只在帮助辨认或理解事件时使用。
-不为水印、空白、取证标注或重复引用补造剧情；facet层无需重复覆盖事件的全部片段。
-修正值含引用时必须符合expected中的精确ID范围，不猜测或扩展引用。确定性不能超过原来源。
-证据允许保留未知时，直接保留未知。仍无法确定修正值时，将问题放入unresolved：
+仅使用本问题允许的片段及只读上下文，综合其中的相邻过程、对白衔接、人物反应和后续行动，理解人物遇到什么、怎样理解和反应、采取什么行动、事情怎样变化。
+允许合理补足局部动作、说话者、语气、情绪及承接，不要求每个表达都有单独对应的画面；不因缺少单独画面就机械删除前后相容的解释。优先采用前后相容、附加假设较少的解释；时间先后本身不足以证明因果。
+unknown、uncertain及旧模型分析供参考，可由允许的上下文重新理解，不逐条重复“无法确认”。重要歧义仍影响动机、关键行为主体或结果时保留必要限定；需要未提供的上下文才能修正时返回unresolved，不扩大来源。
+保持原作明确的重要事件、人物关系、关键因果及结果一致，不新增重要身份、能力、死亡、背叛或未来剧情。人物猜测、传闻和评价保留说法属性，不直接成为已确认事实。
+世界规则、危险限制、回忆和历史说明保留性质、原作时间及必要未知限制，区别于当前行动；保留重要时间和揭示顺序、剧情与非剧情边界。
+summary 连贯还原剧情；facets 整理前提、目标、阻碍、选择、触发、行动、反应、结果及必要设定，不要求角色齐全。保留有意义的配角行动、必要背景和情绪，不在此决定口播取舍。
+描述是剧情梳理，不写正式口播，不加套话或未来预告；不写构图、衣着、姿态、文字位置或器物型号清单。原始细节由引用保留，不在正文逐项复述。
+已有标记明确排除的封面、空白页、版权说明或片尾提示等非剧情来源无需生成事件；原始记录继续保留。按文字实际依据填写引用，不要求事件或facet逐项覆盖全部输入片段；不能借此修复删除来源或改变事件范围。不为水印、空白、取证标注或重复引用补造剧情。
+合理解释可进入授权的 summary 或 facets 文本，原始来源及确定性如实保留，不通过把 uncertain、unknown 改成 supported 表达推断；facet 的 status 不得超过所引来源，仍属推断时用 uncertain。正确的兄弟字段及已有来源状态保持不变。
+修正值含引用时必须符合expected中的精确ID范围，facet引用必须属于对应事件，不猜测或扩展引用。以上理解和归并原则只用于授权字段的文本，不授权合并、拆分或重排事件、重写整章。
+允许保留必要未知，不为局部修复新增重要事实。仍无法确定修正值时，将问题放入unresolved：
 insufficient_context=缺少理解字段所需上下文；insufficient_evidence=证据不足或矛盾；requires_scope_change=需要修改其他字段、结构或来源。
 reason简短说明具体缺口，不写长篇来源报告。每个输入issue_id必须且只能在patches或unresolved中出现一次，不得返回不存在的issue_id。
 只输出合法JSON：{"patches":[{"issue_id":"对应标识","value":"修正后的字段值"}],"unresolved":[{"issue_id":"对应标识","status":"insufficient_context","reason":"具体缺口"}]}。

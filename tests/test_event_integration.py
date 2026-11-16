@@ -17,7 +17,7 @@ from pipeline.chapter_memory import prompt_context
 from pipeline.prompt_material import context_catalog
 from integration_fixture import integration_response
 from test_engagement_flow import story
-from test_story_reuse import grounding_model as candidate_model, counts
+from test_story_reuse import grounding_model, counts
 
 
 @pytest.fixture(autouse=True)
@@ -91,13 +91,11 @@ def test_merge_split_preserve_rules_supporting_action_order_sources_and_original
     assert analysis == before
 
 
-@pytest.mark.parametrize('change', ['missing', 'unknown_ref', 'wrong_order', 'crossed_order', 'promoted', 'invented_cause', 'empty_facets'])
-def test_invalid_coverage_references_order_and_uncertainty_rejected(analysis, change):
+@pytest.mark.parametrize('change', ['unknown_ref', 'wrong_order', 'crossed_order', 'promoted', 'invented_cause', 'empty_facets'])
+def test_invalid_references_order_and_uncertainty_rejected(analysis, change):
     f = fragments_for(analysis)
     raw = merged_response(analysis)
-    if change == 'missing':
-        raw['events'].pop(0)
-    elif change == 'unknown_ref':
+    if change == 'unknown_ref':
         raw['events'][0]['fragment_ids'] = ['F99999']
     elif change == 'wrong_order':
         raw['events'].reverse()
@@ -114,7 +112,7 @@ def test_invalid_coverage_references_order_and_uncertainty_rejected(analysis, ch
         consume(raw, analysis, f)
 
 
-def test_complete_panel_information_without_extracted_event_cannot_disappear(analysis):
+def test_uncited_panel_information_remains_in_analysis_without_coverage_gate(analysis):
     analysis['events'] = analysis['events'][:-1]
     analysis['panels'][-1]['dialogue'] = [{'speaker_id': None, 'text': '这层房间也不能点火。'}]
     f = fragments_for(analysis)
@@ -122,8 +120,8 @@ def test_complete_panel_information_without_extracted_event_cannot_disappear(ana
     result = consume(raw, analysis, f)
     assert result[-1]['source_event_ids'] == [] and result[-1]['dialogue'][0]['text'] == '这层房间也不能点火。'
     raw['events'].pop()
-    with pytest.raises(StoryError, match='遗漏'):
-        consume(raw, analysis, f)
+    assert len(consume(raw, analysis, f)) == len(raw['events'])
+    assert analysis['panels'][-1]['dialogue'][0]['text'] == '这层房间也不能点火。'
 
 
 @pytest.mark.parametrize('status', ['unknown', 'uncertain', 'inferred', 'needs_review', 'unverified_reference'])
@@ -207,7 +205,7 @@ class Model:
     def ask(self, stage, prompt, images=None, fresh=False):
         assert stage == 'event_integration' and not images
         self.calls.append((prompt, fresh))
-        if 'Event Integration Field Repair v1' in prompt:
+        if 'Event Integration Field Repair v' in prompt:
             raise StoryError('事件整合遗漏本话信息片段')
         raw = integration_response(prompt)
         if self.bad:
@@ -243,23 +241,23 @@ def test_cache_binds_actual_input_source_version_prompt_model_and_output_contrac
     assert bible == before and integrated['analysis_events'] == bible['events']
 
 
-def test_old_reference_cache_is_not_event_integration_and_missing_event_stays_pending(story):
+def test_old_reference_cache_is_not_event_integration_and_uncited_rows_need_no_repair(story):
     store, state, _, _ = story
     model = Model()
     validated_result(store, model, 'context_digest', {}, lambda: {'background': ['旧摘要'], 'characters': []})
     model.bad = True
-    with pytest.raises(StoryError, match='遗漏'):
-        integrate_chapter(store, model, state['bible'], 'source')
+    result = integrate_chapter(store, model, state['bible'], 'source')
     assert len(model.calls) == 1 and [fresh for _, fresh in model.calls] == [False]
     model.bad = False
-    result = integrate_chapter(store, model, state['bible'], 'source')
-    assert len(model.calls) == 2 and result['event_integration']['source_revision'] == 'source'
+    assert integrate_chapter(store, model, state['bible'], 'source') == result
+    assert len(model.calls) == 1 and result['event_integration']['source_revision'] == 'source'
+    assert result['analysis_events'] == state['bible']['events']
     assert store.read() == state
 
 
 def test_separate_first_step_saves_no_script_keeps_old_versions_and_reuses_on_generate(story):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     before = {p: p.read_bytes() for folder in ('evidence', 'revisions') for p in (store.root/folder).glob('*')}
     integrated = pipeline.integrate(state['revision'])
     assert integrated['stage'] == 'integrated' and integrated['script'] is None and integrated['plan'] is None
@@ -278,7 +276,7 @@ def test_separate_first_step_saves_no_script_keeps_old_versions_and_reuses_on_ge
 
 def test_same_chapter_notes_never_resent_in_planning_facts_writing_review_or_comparison(story):
     store, state, model, pipeline = story
-    candidate_model(story)
+    grounding_model(story)
     old = {'series_notes': {'background': 'OLD_BACKGROUND_SENTINEL'*300, 'characters': 'OLD_CHAR_SENTINEL'*300},
            'background': [{'text': 'SAME_CHAPTER_JSON_SENTINEL', 'event_ids': ['E1']}]}
     state['bible']['prior_context'] = old

@@ -215,7 +215,7 @@ def test_unknown_roster_can_write_with_stable_supported_labels():
     class Model:
         def ask(self,stage,prompt,**kwargs):
             assert 'identity_availability' in prompt and '桥边的人' in prompt
-            assert '职业、关系或行为身份' in prompt
+            assert '不为衔接新增身份、职业或亲属关系' in prompt
             return {'text':'沙流开始倒转，桥边的人拉紧绳索，等另一头传来回应。'}
     result=ScriptWriter(Model()).write_segment(bible,{'style':'faithful','beats':[beat]},beat)
     assert narration_lint([result])==[] and result['review_status']=='pending'

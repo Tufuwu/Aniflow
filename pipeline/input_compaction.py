@@ -7,6 +7,11 @@ EVENT_LISTS = {'character_ids', 'actions', 'dialogue', 'causes', 'facets',
                'pending_causes', 'internal_causes', 'evidence'}
 CHARACTER_LISTS = {'aliases', 'pending_names', 'name_claims', 'label_claims'}
 IDENTITY_LISTS = {'available_by_node_end', 'not_yet_revealed', 'legacy_needs_verification'}
+WRITING_EVENT_FORMAT = {
+    'facets': ['role', 'status', 'text'],
+    'evidence': ['kind', 'detail'],
+    'omitted_time': {'original_time': '未知', 'status': 'unknown'},
+}
 
 
 def compact_json(value):
@@ -45,3 +50,24 @@ def compact_identity(rows):
     if any(row.get(key) for row in rows for key in IDENTITY_LISTS):
         return [omit_empty_lists(deepcopy(row), IDENTITY_LISTS) for row in rows]
     return {'status': 'no_confirmed_reveals'}
+
+
+def compact_writing_events(events):
+    """Use positional rows only for exact schemas; retain exceptional objects.
+
+    The writing prompt declares missing time as unknown. Explicit historical
+    times, extra annotations, nulls and conflicting states remain untouched.
+    This view must not replace the object records used by other stages.
+    """
+    result = deepcopy(events)
+    for event in result:
+        for field in ('facets', 'evidence'):
+            columns = WRITING_EVENT_FORMAT[field]
+            if isinstance(event.get(field), list):
+                event[field] = [
+                    [row[key] for key in columns]
+                    if isinstance(row, dict) and set(row) == set(columns) else row
+                    for row in event[field]]
+        if event.get('time') == WRITING_EVENT_FORMAT['omitted_time']:
+            event.pop('time')
+    return result

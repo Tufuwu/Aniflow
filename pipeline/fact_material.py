@@ -3,7 +3,8 @@ from copy import deepcopy
 
 from pipeline.character_identity import identity_context
 from pipeline.input_compaction import (compact_event, compact_characters,
-                                       compact_identity, omit_empty_lists)
+                                       compact_identity, omit_empty_lists,
+                                       compact_writing_events, WRITING_EVENT_FORMAT)
 from pipeline.prompt_material import character_index, necessary_events, context_catalog, editor_material
 from pipeline.story_bible import digest
 from pipeline.story_model import require
@@ -11,7 +12,7 @@ from pipeline.opening_recap import with_opening_recap, recap_view
 
 
 FACT_CONTRACT_VERSION = 4
-SOURCE_MATERIAL_VERSION = 2
+SOURCE_MATERIAL_VERSION = 4  # Isolate drafts created under the contextual-writing policy.
 EVENT_FIELDS = ('event_id', 'summary', 'character_ids', 'actions', 'dialogue', 'causes',
                 'kind', 'time', 'facets', 'status', 'pending_causes', 'internal_causes',
                 'reveal_order', 'evidence', 'historical', 'history_origin')
@@ -93,6 +94,8 @@ def writing_material(bible, plan):
     require(selected | context <= {e['event_id'] for e in bible['events']}, '写作规划引用未知事件')
     require(set(plan.get('essential_event_ids', [])) <= selected, '写作规划缺少必保事件')
     source = fact_material(bible, plan)
+    source['events'] = compact_writing_events(source['events'])
+    source['event_format'] = deepcopy(WRITING_EVENT_FORMAT)
     continuity = editor_material(bible, plan)
     return {k: v for k, v in source.items() if k != 'context_catalog'} | {
         'prior_context': continuity['prior_context'],

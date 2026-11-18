@@ -5,10 +5,41 @@ import re
 import shutil
 import subprocess
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from pipeline.shot_selector import require
 from pipeline.timeline_director import FPS, audio_duration, ffmpeg_exe, validate_timeline
+
+
+# A full-width 4:3 landscape viewport on a 1080 × 1920 canvas.
+ART_BOX = (0, 420, 1080, 810)
+CAPTION_LEFT = 64
+CAPTION_RIGHT = 180
+CAPTION_BOTTOM = 470
+CAPTION_CENTER = (CAPTION_LEFT + 1080 - CAPTION_RIGHT) // 2
+
+
+def frame_art(art, canvas_width=1080):
+    x, y, width, height = ART_BOX
+    if canvas_width != width:
+        # Limit the pan to the fitted image, excluding unused space on its sides.
+        fitted_width = ImageOps.contain(art, (canvas_width, height)).width
+        width = canvas_width = max(width, fitted_width - fitted_width % 2)
+    background = Image.new('RGB', (canvas_width, 1920))
+    blurred = ImageOps.fit(art, (width // 4, height // 4), Image.Resampling.LANCZOS)
+    blurred = blurred.filter(ImageFilter.GaussianBlur(16))
+    blurred = ImageEnhance.Brightness(blurred).enhance(.35)
+    background.paste(blurred.resize((width, height), Image.Resampling.BICUBIC), (x, y))
+    fitted = ImageOps.contain(art, (width, height), Image.Resampling.LANCZOS)
+    background.paste(fitted, (x + (width - fitted.width) // 2, y + (height - fitted.height) // 2))
+    return background
+
+
+def matte_filter():
+    _, y, _, height = ART_BOX
+    bottom = y + height
+    return (f'drawbox=x=0:y=0:w=iw:h={y}:color=black:t=fill,'
+            f'drawbox=x=0:y={bottom}:w=iw:h={1920-bottom}:color=black:t=fill')
 
 
 def run(args, cwd=None):
@@ -33,12 +64,12 @@ def ass_time(frame):
     return f'{cs//360000}:{cs//6000%60:02d}:{cs//100%60:02d}.{cs%100:02d}'
 
 
-def ass_text(timeline):
+def ass_text(timeline, *, font_size=52, outline=2.5):
     """Use video pixels explicitly; avoid libass's implicit low-resolution canvas."""
     lines = ['[Script Info]','ScriptType: v4.00+','PlayResX: 1080','PlayResY: 1920','WrapStyle: 0','',
              '[V4+ Styles]',
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-             'Style: Caption,Microsoft YaHei,52,&H00FFFFFF,&H00FFFFFF,&H00100C15,&H90000000,-1,0,0,0,100,100,0,0,1,2.5,0,2,70,70,150,1','',
+             f'Style: Caption,Microsoft YaHei,{font_size},&H00FFFFFF,&H00FFFFFF,&H00100C15,&H90000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,{CAPTION_LEFT},{CAPTION_RIGHT},{CAPTION_BOTTOM},1','',
              '[Events]','Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
     for sub in timeline['subtitles']:
         text = sub['text'].replace('\\', '＼').replace('{','｛').replace('}','｝').replace('\n',r'\N')
@@ -80,8 +111,6 @@ def render_timeline(store, source, timeline, output_dir, progress=None, display_
     work.mkdir()
     panels = {p["source_panel_id"]: p for p in source["bible"]["panels"]}
     visual_checks = []
-    # Reuse AniFlow's background compositor; detection/cropping remains in existing modules.
-    from pipeline.compositor import _apply_bg_mode
     for i, shot in enumerate(timeline["shots"]):
         panel = panels[shot['panel_id']]
         path = store.evidence_path(panel)
@@ -98,10 +127,7 @@ def render_timeline(store, source, timeline, output_dir, progress=None, display_
                    round((x + w) * image.width), round((y + h) * image.height))
             require(box[2] > box[0] and box[3] > box[1], "裁切区域小于一个像素")
             image = image.crop(box)
-            base = Image.fromarray(_apply_bg_mode(image, 1080, 1920, "blur", None))
-            base = Image.blend(base,Image.new('RGB',base.size,'#0c101b'),.72)
-            fitted = ImageOps.contain(image, (1000, 1390), Image.Resampling.LANCZOS)
-            base.paste(fitted, ((1080-fitted.width)//2, 180+(1390-fitted.height)//2))
+            base = frame_art(image)
             base.save(work / f"base_{i:04d}.png")
             gray = image.resize((128,128)).convert('L')
             white = sum(v >= 250 for v in gray.getdata())/(128*128)
@@ -118,6 +144,7 @@ def render_timeline(store, source, timeline, output_dir, progress=None, display_
         if motion in {"pan_up", "pan_down"}:
             yexpr = f"(ih-ih/zoom)*{'(1-' + ratio + ')' if motion == 'pan_up' else ratio}"
         vf = f"scale=2160:3840,zoompan=z='{zoom}':x='{xexpr}':y='{yexpr}':d={n}:s=1080x1920:fps={FPS},setsar=1"
+        vf += f",{matte_filter()}"
         if shot["transition_frames"]:
             vf += f",fade=t=in:st=0:d={shot['transition_frames'] / FPS}"
         run(["-i", f"base_{i:04d}.png", "-vf", vf, "-frames:v", str(n), "-an",
@@ -144,7 +171,9 @@ def render_timeline(store, source, timeline, output_dir, progress=None, display_
          "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(target)], work)
     report = inspect_export(target, timeline)
     report['presentation'] = {'subtitle_canvas':[1080,1920],'subtitle_font_size':52,'subtitle_safe_area':True,
-                               'art_box':[40,180,1000,1390], 'shot_checks':visual_checks,
+                               'art_box':list(ART_BOX),
+                               'caption_margins':[CAPTION_LEFT,CAPTION_RIGHT,CAPTION_BOTTOM],
+                               'shot_checks':visual_checks,
                                'sparse_shots':[x['shot_id'] for x in visual_checks if x['sparse_content']],
                                'semantic_review':'requires_review; local image statistics do not prove story quality'}
     if progress:

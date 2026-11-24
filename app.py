@@ -58,6 +58,8 @@ def _story_panels(project_name):
 app.register_blueprint(create_story_blueprint(panel_provider=_story_panels))
 from pipeline.shot_api import create_shot_blueprint
 app.register_blueprint(create_shot_blueprint())
+from pipeline.quality_api import create_quality_blueprint
+app.register_blueprint(create_quality_blueprint())
 
 # ─── Page Routes ─────────────────────────────────────────────────
 @app.route('/')
@@ -1764,7 +1766,14 @@ def charbuilder_add_bulk():
 def export_capcut(project_name):
     state = PipelineState.load(project_name)
     settings = request.json or {}
-    project = orchestrator.export_capcut(state, settings)
+    if not isinstance(settings, dict):
+        return jsonify(error="无效的 CapCut 导出配置"), 400
+    try:
+        project = orchestrator.export_capcut(state, settings)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except RuntimeError as exc:
+        return jsonify(error=str(exc)), 503
     return jsonify({'status': 'exported', 'project': project})
 
 @app.route('/api/capcut/subtitles/<project_name>', methods=['POST'])

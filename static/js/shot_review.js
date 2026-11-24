@@ -76,7 +76,7 @@
       $('#engine').value = state.tts_options?.engine || 'edge'; return;
     }
     const exp = state.export, exportUrl = exp ? `${api()}/exports/${exp.export_id}` : '';
-    content.innerHTML = `<div class="toolbar"><button data-action="export" ${disabled() || !state.timeline || !approved ? 'disabled' : ''}>导出竖屏 MP4</button><span class="muted">先审核全部镜头组，再生成时间轴。每次导出保留独立版本。</span></div>${exp ? `<div class="preview"><video controls playsinline preload="metadata" src="${exportUrl}/video.mp4"></video><div><h2>成片已完成校验</h2><p>1080×1920 · 9:16 · H.264 MP4</p><p>剧情覆盖 ${percent(exp.metrics.coverage_rate)} · 解码校验 ${exp.report.decoded_frames} 帧</p><p>最大音画偏差 ${(exp.sync.max_audio_visual_error*1000).toFixed(1)}ms</p><div class="row"><a class="button" href="${exportUrl}/video.mp4?download=1">下载视频</a><a class="button secondary" href="${exportUrl}/subtitles.srt?download=1">下载字幕</a><a class="button secondary" href="${exportUrl}/manifest.json?download=1">导出决策清单</a></div></div></div>` : '<div class="empty">完成镜头审核与时间轴后，这里将显示成片。</div>'}`;
+    content.innerHTML = `<div class="toolbar"><button data-action="export" ${disabled() || !state.timeline || !approved ? 'disabled' : ''}>导出竖屏 MP4</button><label><input type="checkbox" id="export-quality"> 智能画质增强</label><label><input type="checkbox" id="export-quality-face"> 人脸修复</label><span class="muted">先审核全部镜头组，再生成时间轴。每次导出保留独立版本。</span></div>${exp ? `<div class="preview"><video controls playsinline preload="metadata" src="${exportUrl}/video.mp4"></video><div><h2>成片已完成校验</h2><p>1080×1920 · 9:16 · H.264 MP4</p><p>剧情覆盖 ${percent(exp.metrics.coverage_rate)} · 解码校验 ${exp.report.decoded_frames} 帧</p><p>最大音画偏差 ${(exp.sync.max_audio_visual_error*1000).toFixed(1)}ms</p><div class="row"><a class="button" href="${exportUrl}/video.mp4?download=1">下载视频</a><a class="button secondary" href="${exportUrl}/subtitles.srt?download=1">下载字幕</a><a class="button secondary" href="${exportUrl}/manifest.json?download=1">导出决策清单</a></div></div></div>` : '<div class="empty">完成镜头审核与时间轴后，这里将显示成片。</div>'}`;
   }
   function drawLibrary(query) {
     const selected = new Set(state.groups.flatMap(g => g.selected.map(s => s.panel_id)));
@@ -115,7 +115,9 @@
     if(button.dataset.action === 'refresh') return load();
     if(button.dataset.action === 'select') return action('select',{source_revision:state.source_revision || state.readiness?.source_revision,use_model:$('#use-model').checked});
     if(button.dataset.action === 'direct') return action('direct',state.voice_direction ? {} : {tts:{engine:$('#engine').value,voice:$('#voice').value}});
-    if(button.dataset.action === 'export') return action('export');
+    if(button.dataset.action === 'export') return action('export', {quality_enhancement: {
+      enabled: $('#export-quality').checked, face: $('#export-quality-face').checked
+    }});
     const nid=button.dataset.nid;
     if(button.dataset.review) return action(`groups/${enc(nid)}/${button.dataset.review}`);
     if(button.dataset.crop) return openCrop(nid,button.dataset.crop);

@@ -68,6 +68,9 @@ class CapCutDirector:
 
         timeline = []
         current_time = 0.0
+        from pipeline.quality_enhancement import EnhancementOptions, EnhancementService
+        enhancement = EnhancementOptions.parse((settings or {}).get("quality_enhancement"))
+        service = EnhancementService() if enhancement.enabled else None
 
         # Add intro if exists
         intro_track = self._get_intro_track(settings)
@@ -78,6 +81,14 @@ class CapCutDirector:
 
         for i, panel in enumerate(panels):
             duration = panel.get("audio_duration", 3.0) + config.PANEL_PADDING
+            keyframes = self._generate_keyframes(i, duration, settings)
+            image_path = panel.get("path", "")
+            if service and os.path.isfile(image_path):
+                zoom = max(1., *(float(frame.get("scale", 1.)) for frame in keyframes))
+                if in_anim == "bounce":
+                    zoom *= 1.1
+                image_path = service.image(image_path, (config.VIDEO_WIDTH, config.VIDEO_HEIGHT),
+                                           enhancement, zoom=zoom, fit=True)["path"]
 
             track = {
                 "type": "panel",
@@ -85,7 +96,7 @@ class CapCutDirector:
                 "panel_id": panel.get("panel_id", i + 1),
                 "start_time": current_time,
                 "duration": duration,
-                "image_path": panel.get("path", ""),
+                "image_path": image_path,
                 "audio_path": panel.get("audio_path", ""),
                 "narration": panel.get("narration", ""),
                 "subtitle_path": panel.get("subtitle_path", ""),
@@ -95,7 +106,7 @@ class CapCutDirector:
                 "out_animation": self.OUT_ANIMATIONS.get(out_anim, self.OUT_ANIMATIONS["fade"]),
 
                 # Keyframes
-                "keyframes": self._generate_keyframes(i, duration, settings),
+                "keyframes": keyframes,
 
                 # Subtitle config
                 "subtitle": {

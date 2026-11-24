@@ -122,7 +122,10 @@ def create_shot_blueprint(model_factory=None, speech=None, transcriber=None):
                 elif action == "direct":
                     result = svc.direct(data["revision"], data.get("tts"), progress)
                 elif action == "export":
-                    result = svc.export(data["revision"], progress)
+                    if "quality_enhancement" in data:
+                        result = svc.export(data["revision"], progress, data["quality_enhancement"])
+                    else:
+                        result = svc.export(data["revision"], progress)
                 elif action == 'image_clean':
                     result = svc.clean_images(data['revision'],data.get('options'),data.get('panel_ids'),
                                               data.get('fresh',False),progress,feedback=data.get('feedback'),

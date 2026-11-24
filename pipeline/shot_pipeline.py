@@ -223,7 +223,7 @@ class ShotEditingPipeline(ImageCleanupMixin, VoicePipelineMixin):
             state["sync"] = validate_timeline(timeline, manual_narration_ids=self.manual_narration_ids(source))
             return self.store.save(state, "direct_timeline", revision)
 
-    def export(self, revision, progress=None):
+    def export(self, revision, progress=None, quality_enhancement=None):
         with self.store.lock:
             state = self._current(revision)
             source = self.source(state)
@@ -246,15 +246,16 @@ class ShotEditingPipeline(ImageCleanupMixin, VoicePipelineMixin):
             export_id = uuid4().hex
             directory = self.store.root / "exports" / export_id
             directory.parent.mkdir(parents=True, exist_ok=True)
-            report = compose_story_timeline(self.story, source, state["timeline"], directory, progress,
-                                           display_assets=assets) if assets else compose_story_timeline(
-                                               self.story, source, state["timeline"], directory, progress)
+            render_options = {"display_assets": assets} if assets else {}
+            if quality_enhancement is not None:
+                render_options["quality_enhancement"] = quality_enhancement
+            report = compose_story_timeline(self.story, source, state["timeline"], directory, progress, **render_options)
             result = {"export_id": export_id, "editing_revision": revision, "source_revision": state["source_revision"],
                       "report": report, "metrics": state["metrics"], "sync": state["sync"],
                       "video_sha256": hashlib.sha256((directory / "video.mp4").read_bytes()).hexdigest()}
             atomic_json(directory / "manifest.json", {**result, "timeline": state["timeline"], "groups": state["groups"],
                 "voice_direction": state.get("voice_direction"), "voice_selected": state.get("voice_selected"),
                 "voice_samples": state.get("voice_samples"), "display_assets": assets,
-                "image_cleanup": state.get("image_cleanup")})
+                "image_cleanup": state.get("image_cleanup"), "quality_enhancement": quality_enhancement})
             state.update(export=result, stage="exported")
             return self.store.save(state, "export_video", revision)

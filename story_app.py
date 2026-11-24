@@ -12,6 +12,7 @@ from flask import Flask
 from pipeline.downloader import _natural_sort_key, validate_images
 from pipeline.story_api import create_story_blueprint, story_store
 from pipeline.shot_api import create_shot_blueprint
+from pipeline.quality_api import create_quality_blueprint
 from pipeline.story_bible import StoryConflict, StoryError, atomic_json
 
 
@@ -40,6 +41,7 @@ def create_app():
     app = Flask(__name__)
     app.register_blueprint(create_story_blueprint())
     app.register_blueprint(create_shot_blueprint())
+    app.register_blueprint(create_quality_blueprint())
     return app
 
 

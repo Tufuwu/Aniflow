@@ -9,26 +9,29 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from pipeline.shot_selector import require
 from pipeline.timeline_director import FPS, audio_duration, ffmpeg_exe, validate_timeline
+from pipeline.quality_enhancement import EnhancementOptions, EnhancementService
 
 
 # A full-width 4:3 landscape viewport on a 1080 × 1920 canvas.
 ART_BOX = (0, 420, 1080, 810)
+MOTION_ZOOM = 1.06
 CAPTION_LEFT = 64
 CAPTION_RIGHT = 180
 CAPTION_BOTTOM = 470
 CAPTION_CENTER = (CAPTION_LEFT + 1080 - CAPTION_RIGHT) // 2
 
 
-def frame_art(art, canvas_width=1080):
+def frame_art(art, canvas_width=1080, pixel_scale=1):
     x, y, width, height = ART_BOX
     if canvas_width != width:
         # Limit the pan to the fitted image, excluding unused space on its sides.
         fitted_width = ImageOps.contain(art, (canvas_width, height)).width
         width = canvas_width = max(width, fitted_width - fitted_width % 2)
-    background = Image.new('RGB', (canvas_width, 1920))
+    background = Image.new('RGB', (canvas_width * pixel_scale, 1920 * pixel_scale))
     blurred = ImageOps.fit(art, (width // 4, height // 4), Image.Resampling.LANCZOS)
     blurred = blurred.filter(ImageFilter.GaussianBlur(16))
     blurred = ImageEnhance.Brightness(blurred).enhance(.35)
+    x, y, width, height = (value * pixel_scale for value in (x, y, width, height))
     background.paste(blurred.resize((width, height), Image.Resampling.BICUBIC), (x, y))
     fitted = ImageOps.contain(art, (width, height), Image.Resampling.LANCZOS)
     background.paste(fitted, (x + (width - fitted.width) // 2, y + (height - fitted.height) // 2))
@@ -103,8 +106,10 @@ def inspect_export(path, timeline):
             "audio_duration_error": abs(decoded_audio - timeline["duration"]), "bytes": path.stat().st_size}
 
 
-def render_timeline(store, source, timeline, output_dir, progress=None, display_assets=None):
+def render_timeline(store, source, timeline, output_dir, progress=None, display_assets=None, quality_enhancement=None):
     validate_timeline(timeline)
+    enhancement = EnhancementOptions.parse(quality_enhancement)
+    service = EnhancementService() if enhancement.enabled else None
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=False)
     work = root / "work"
@@ -120,24 +125,35 @@ def render_timeline(store, source, timeline, output_dir, progress=None, display_
             require(derivative.get('review_status') == 'approved' and derivative.get('original_sha256') == panel['sha256'],
                     '清图尚未审核或不属于当前来源')
             require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == derivative['sha256'], '清图校验失败')
+        motion = shot["motion"]
+        quality = None
+        if service:
+            quality = service.image(path, ART_BOX[2:], enhancement, crop=shot["crop"], fit=True,
+                                    zoom=1. if motion == "hold" else MOTION_ZOOM)
+            path = quality["path"]
         with Image.open(path) as opened:
             image = opened.convert("RGB")
-            x, y, w, h = shot["crop"]
-            box = (round(x * image.width), round(y * image.height),
-                   round((x + w) * image.width), round((y + h) * image.height))
-            require(box[2] > box[0] and box[3] > box[1], "裁切区域小于一个像素")
-            image = image.crop(box)
-            base = frame_art(image)
+            if not quality or not quality["enhanced"]:
+                x, y, w, h = shot["crop"]
+                box = (round(x * image.width), round(y * image.height),
+                       round((x + w) * image.width), round((y + h) * image.height))
+                require(box[2] > box[0] and box[3] > box[1], "裁切区域小于一个像素")
+                image = image.crop(box)
+            base = frame_art(image, pixel_scale=2 if quality else 1)
             base.save(work / f"base_{i:04d}.png")
             gray = image.resize((128,128)).convert('L')
             white = sum(v >= 250 for v in gray.getdata())/(128*128)
             visual_checks.append({'shot_id':shot['shot_id'],'panel_id':shot['panel_id'],
                                   'white_fraction':round(white,4),'sparse_content':white > .95,
                                   'boundary_uncertain':panels[shot['panel_id']].get('boundary_uncertain',False)})
-        n, motion = shot["frames"], shot["motion"]
+            if quality:
+                visual_checks[-1]["quality_enhancement"] = {key: quality[key] for key in
+                    ("quality", "plan", "enhanced", "faces_restored")}
+        n = shot["frames"]
         ratio = f"on/{max(1, n - 1)}"
-        zoom = "1" if motion == "hold" else f"1+0.06*{ratio}" if motion == "zoom_in" else (
-            f"1.06-0.06*{ratio}" if motion == "zoom_out" else "1.06")
+        delta = f"{MOTION_ZOOM - 1:.2f}"
+        zoom = "1" if motion == "hold" else f"1+{delta}*{ratio}" if motion == "zoom_in" else (
+            f"{MOTION_ZOOM}-{delta}*{ratio}" if motion == "zoom_out" else str(MOTION_ZOOM))
         xexpr, yexpr = "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"
         if motion in {"pan_left", "pan_right"}:
             xexpr = f"(iw-iw/zoom)*{'(1-' + ratio + ')' if motion == 'pan_left' else ratio}"

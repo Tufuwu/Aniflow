@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AniFlow · 画质增强</title>
+  <link rel="stylesheet" href="/static/css/shot_review.css">
+  <style>
+    main { max-width: 1080px; margin: auto; padding: 32px 20px; }
+    form { display: flex; gap: 14px; flex-wrap: wrap; align-items: end; margin: 24px 0; }
+    form label { display: grid; gap: 6px; }
+    .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    figure { margin: 0; min-width: 0; }
+    figure img { width: 100%; height: clamp(180px, 42vw, 500px); object-fit: contain; background: #15151b; }
+    article { margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="/">AniFlow</a>
+    <h1>智能画质增强</h1>
+    <form id="quality-form">
+      <label>图片<input type="file" name="image" accept="image/jpeg,image/png,image/webp,image/bmp" required multiple></label>
+      <label>目标宽度<input type="number" name="width" value="1920" min="1" max="8192" required></label>
+      <label>目标高度<input type="number" name="height" value="1080" min="1" max="8192" required></label>
+      <label>最大缩放<input type="number" name="zoom" value="1.15" min="1" max="8" step="0.01" required></label>
+      <label>人脸修复<input type="checkbox" name="face"></label>
+      <label>人脸保真度<input type="number" name="fidelity" value="0.9" min="0.5" max="1" step="0.01" required></label>
+      <button type="submit">分析并预览</button>
+    </form>
+    <p id="quality-status" role="status"></p>
+    <section id="quality-results"></section>
+  </main>
+  <script src="/static/js/quality_enhancement.js" defer></script>
+</body>
+</html>

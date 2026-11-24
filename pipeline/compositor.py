@@ -12,12 +12,14 @@ Scene Mode (YouTube-style):
   while panels cut beneath it at type-based timing.
 """
 import os, math, subprocess
+from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import (ImageClip, AudioFileClip, CompositeVideoClip,
     concatenate_videoclips, concatenate_audioclips, ColorClip, TextClip,
     CompositeAudioClip, VideoClip, VideoFileClip)
 import config
+from pipeline.quality_enhancement import EnhancementOptions, prepare_panels
 
 RESOLUTION_MAP = {
     "1080p": (1920, 1080),   # 16:9 landscape (YouTube standard)
@@ -28,16 +30,39 @@ RESOLUTION_MAP = {
     "4k_landscape": (3840, 2160),
     "9:16":  (1080, 1920),   # portrait / TikTok / Shorts
     "portrait": (1080, 1920),
+    "1080p_portrait": (1080, 1920),
+    "2k_portrait": (1440, 2560),
+    "4k_portrait": (2160, 3840),
 }
 FPS_OPTIONS = [30, 60]
 
 
-def compose_story_timeline(store, source, timeline, output_dir, progress_callback=None, display_assets=None):
+def compose_story_timeline(store, source, timeline, output_dir, progress_callback=None, display_assets=None, **options):
     """Approved, evidence-constrained single-chapter portrait export."""
     from pipeline.timeline_compositor import render_timeline
     if display_assets:
-        return render_timeline(store, source, timeline, output_dir, progress_callback, display_assets=display_assets)
-    return render_timeline(store, source, timeline, output_dir, progress_callback)
+        options["display_assets"] = display_assets
+    return render_timeline(store, source, timeline, output_dir, progress_callback, **options)
+
+
+def _prepare_quality_panels(panels, size, settings, animation, progress, moving_background=False):
+    active_motion = animation != 'none' and not moving_background
+    landscape = size[0] > size[1]
+    zoom_min, zoom_max = config.KEN_BURNS_ZOOM_RANGE
+    zoom = zoom_min if (animation or '').startswith('slide_') else zoom_max
+    if landscape:
+        zoom *= zoom_max * 1.05
+    elif active_motion:
+        zoom = max(zoom, zoom_max * 1.05)  # Tall portrait strips scroll at the full sampling scale.
+    # The portrait renderer uses a cover layout while moving and a fit layout when static.
+    fit = "cover" if active_motion and not landscape else True
+    return prepare_panels(panels, size, settings, zoom if active_motion else 1.0, progress, fit=fit)
+
+
+def _preserve_foreground(base, original, fitted_w, fitted_h, ox, oy, output_width):
+    factor = base.width / output_width
+    art = original.resize((max(1, round(fitted_w * factor)), max(1, round(fitted_h * factor))), Image.LANCZOS)
+    base.paste(art, (round(ox * factor), round(oy * factor)))
 
 # ⚡ SPEED MODE: cached probe result for the macOS hardware encoder
 _VT_PROBE = None
@@ -133,7 +158,7 @@ def _get_ffmpeg_exe():
 
 
 def _prepare_landscape_base(image_path, video_w, video_h, animation_style, panel_index,
-                            tmp_dir, panel_tag, bg_mode='blur', custom_bg_path=None):
+                            tmp_dir, panel_tag, bg_mode='blur', custom_bg_path=None, preserve_detail=False):
     """⚡ SPEED MODE (ffmpeg-native): pre-composite the panel onto its background
     (honoring bg_mode) and enlarge it — the exact same base the moviepy path
     builds — then save it as a PNG for the zoompan filter.
@@ -194,15 +219,19 @@ def _prepare_landscape_base(image_path, video_w, video_h, animation_style, panel
         effect = {'zoom_in': 0, 'zoom_out': 1, 'slide_left': 2,
                   'slide_right': 3, 'slide_up': 4, 'slide_down': 5}.get(animation_style, 0)
 
-    base_big = base_frame.resize(
-        (int(video_w * zoom_max * headroom_scale),
-         int(video_h * zoom_max * headroom_scale)), Image.LANCZOS)
+    base_w = int(video_w * zoom_max * headroom_scale)
+    base_h = int(video_h * zoom_max * headroom_scale)
+    sample_scale = zoom_max if preserve_detail else 1
+    base_big = base_frame.resize((round(base_w * sample_scale), round(base_h * sample_scale)), Image.LANCZOS)
+    if preserve_detail:
+        _preserve_foreground(base_big, img, fitted_w, fitted_h, ox, oy, video_w)
     big_w, big_h = base_big.size
 
     os.makedirs(tmp_dir, exist_ok=True)
     out_path = os.path.join(tmp_dir, f"_base_{panel_tag}.png")
     base_big.save(out_path)
     return {'base': out_path, 'static': False, 'effect': effect,
+            'render_scale': base_w / video_w,
             'zoom_min': zoom_min, 'zoom_max': zoom_max,
             'big_w': big_w, 'big_h': big_h}
 
@@ -212,7 +241,7 @@ def _zoompan_filter(base_info, duration, fps, video_w, video_h):
     crop window = video/zoom positioned by eased progress over the big canvas."""
     frames = max(2, int(math.ceil(duration * fps)))
     big_w, big_h = base_info['big_w'], base_info['big_h']
-    F = big_w / video_w  # base canvas is F× the video width
+    F = base_info.get('render_scale', big_w / video_w)
     ZMIN = base_info['zoom_min'] * F
     ZMAX = base_info['zoom_max'] * F
 
@@ -372,6 +401,10 @@ def generate_individual_clips(panels, state, progress_callback=None,
     """
     w, h = RESOLUTION_MAP.get(resolution, (1920, 1080))  # Default to 1080p landscape
     fps = fps if fps in FPS_OPTIONS else 30
+    enhancement = state.settings.get('quality_enhancement')
+    quality_enabled = EnhancementOptions.parse(enhancement).enabled
+    panels = _prepare_quality_panels(panels, (w, h), enhancement, animation_style, progress_callback,
+                                     w > h and bg_mode == 'custom' and _is_video_file(custom_bg_path))
     
     clips_dir = state.clips_dir
     os.makedirs(clips_dir, exist_ok=True)
@@ -380,9 +413,9 @@ def generate_individual_clips(panels, state, progress_callback=None,
     clip_metadata = []
     
     bitrate_map = {'low': '2000k', 'medium': '5000k', 'high': '8000k'}
-    if resolution in ["2k", "2k_landscape"]:
+    if resolution in ["2k", "2k_landscape", "2k_portrait"]:
         bitrate_map = {'low': '4000k', 'medium': '8000k', 'high': '12000k'}
-    elif resolution in ["4k", "4k_landscape"]:
+    elif resolution in ["4k", "4k_landscape", "4k_portrait"]:
         bitrate_map = {'low': '8000k', 'medium': '15000k', 'high': '25000k'}
     bitrate = bitrate_map.get(quality, '5000k')
 
@@ -439,11 +472,12 @@ def generate_individual_clips(panels, state, progress_callback=None,
         panel_id = panel.get('panel_id', i + 1)
         clip_filename = f"scene_{panel_id:05d}.mp4"
         clip_path = os.path.join(clips_dir, clip_filename)
+        quality_marker = Path(clip_path + '.quality')
         audio_path = panel.get('audio_path', '')
 
         # ⚡ SPEED MODE: reuse an existing clip unless a source file is newer
         # (panel image re-cropped / audio regenerated → mtime bumps → re-encode)
-        if fast_mode and os.path.exists(clip_path) and os.path.getsize(clip_path) > 10000:
+        if fast_mode and not quality_enabled and not quality_marker.exists() and os.path.exists(clip_path) and os.path.getsize(clip_path) > 10000:
             try:
                 clip_mtime = os.path.getmtime(clip_path)
                 src_newer = False
@@ -475,6 +509,9 @@ def generate_individual_clips(panels, state, progress_callback=None,
             except Exception:
                 pass  # fall through to full regeneration
 
+        if quality_enabled:
+            quality_marker.touch()
+
         # Get audio duration
         audio_duration = None
         if audio_path and os.path.exists(audio_path):
@@ -496,7 +533,8 @@ def generate_individual_clips(panels, state, progress_callback=None,
             try:
                 prepared = _prepare_landscape_base(
                     panel_path, w, h, animation_style, i, clips_dir, f"{panel_id:05d}",
-                    bg_mode=bg_mode, custom_bg_path=custom_bg_path)
+                    bg_mode=bg_mode, custom_bg_path=custom_bg_path,
+                    preserve_detail=panel.get('_preserve_quality_detail', False))
                 if prepared and _render_clip_ffmpeg(
                         prepared, audio_path, clip_path, clip_duration, fps,
                         w, h, watermark_path, use_videotoolbox, bitrate):
@@ -507,6 +545,8 @@ def generate_individual_clips(panels, state, progress_callback=None,
                             os.remove(prepared['panel_rgba'])
                     except OSError:
                         pass
+                    if not quality_enabled:
+                        quality_marker.unlink(missing_ok=True)
                     return {
                         'panel_id': panel_id,
                         'clip_path': clip_path,
@@ -552,6 +592,8 @@ def generate_individual_clips(panels, state, progress_callback=None,
         try:
             # Write individual clip
             _write_clip(composed, clip_path, temp_audio)
+            if not quality_enabled:
+                quality_marker.unlink(missing_ok=True)
             
             # Store metadata
             return {
@@ -628,7 +670,7 @@ def compose_video(panels, project_dir, output_path=None, progress_callback=None,
                   bgm_path=None, watermark_path=None, bg_mode="blur",
                   custom_bg_path=None, intro_path=None, outro_path=None,
                   export_clips=False, animation_style="auto",
-                  scene_mode=False):
+                  scene_mode=False, quality_enhancement=None):
     """
     Compose the recap video.
 
@@ -637,6 +679,8 @@ def compose_video(panels, project_dir, output_path=None, progress_callback=None,
     """
     w, h = RESOLUTION_MAP.get(resolution, (1920, 1080))  # Default to 1080p landscape
     fps = fps if fps in FPS_OPTIONS else 30
+    panels = _prepare_quality_panels(panels, (w, h), quality_enhancement, animation_style, progress_callback,
+                                     w > h and bg_mode == 'custom' and _is_video_file(custom_bg_path))
     if output_path is None:
         out_dir = os.path.join(config.VIDEO_OUTPUT_DIR, os.path.basename(project_dir))
         os.makedirs(out_dir, exist_ok=True)
@@ -706,9 +750,9 @@ def compose_video(panels, project_dir, output_path=None, progress_callback=None,
             print(f"[Compositor] BGM error: {e}")
 
     bitrate_map = {'low': '2000k', 'medium': '5000k', 'high': '8000k'}
-    if resolution == "2k":
+    if resolution in ("2k", "2k_portrait"):
         bitrate_map = {'low': '4000k', 'medium': '8000k', 'high': '12000k'}
-    elif resolution == "4k":
+    elif resolution in ("4k", "4k_portrait"):
         bitrate_map = {'low': '8000k', 'medium': '15000k', 'high': '25000k'}
     bitrate = bitrate_map.get(quality, '5000k')
 
@@ -746,7 +790,7 @@ def compose_video(panels, project_dir, output_path=None, progress_callback=None,
 def export_scene_clips(panels, project_dir, output_dir=None,
                        resolution="1080p", fps=30, quality="medium",
                        bg_mode="blur", animation_style="auto",
-                       progress_callback=None):
+                       progress_callback=None, quality_enhancement=None):
     """
     Export one MP4 clip per scene (scene_001.mp4, scene_002.mp4 ...).
     Much faster than full render — each clip is only 10-30s.
@@ -755,6 +799,8 @@ def export_scene_clips(panels, project_dir, output_dir=None,
     Returns list of dicts: [{scene_id, path, duration, panel_count}, ...]
     """
     w, h = RESOLUTION_MAP.get(resolution, (1920, 1080))  # Default to 1080p landscape
+    quality_enabled = EnhancementOptions.parse(quality_enhancement).enabled
+    panels = _prepare_quality_panels(panels, (w, h), quality_enhancement, animation_style, progress_callback)
 
     # Output directory
     if output_dir is None:
@@ -784,9 +830,10 @@ def export_scene_clips(panels, project_dir, output_dir=None,
     for scene_idx, sid in enumerate(scenes_ordered):
         scene_panels = scene_map[sid]
         out_path = os.path.join(output_dir, f"{sid}.mp4")
+        quality_marker = Path(out_path + '.quality')
 
         # Skip already-rendered clips
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
+        if not quality_enabled and not quality_marker.exists() and os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
             if progress_callback:
                 progress_callback(scene_idx + 1, total,
                     f"Skip (cached): {sid} ({scene_idx+1}/{total})")
@@ -804,6 +851,8 @@ def export_scene_clips(panels, project_dir, output_dir=None,
                 f"Rendering {sid} ({scene_idx+1}/{total}, {len(scene_panels)} panels)...")
 
         try:
+            if quality_enabled:
+                quality_marker.touch()
             # Build panel clips for this scene
             panel_durations = []
             for panel in scene_panels:
@@ -857,6 +906,8 @@ def export_scene_clips(panels, project_dir, output_dir=None,
                 temp_audiofile=temp_audio,
                 ffmpeg_params=['-pix_fmt', 'yuv420p'],
             )
+            if not quality_enabled:
+                quality_marker.unlink(missing_ok=True)
 
             clip_dur = scene_video.duration
             scene_video.close()
@@ -1056,7 +1107,8 @@ def _make_panel_clip(panel: dict, video_w: int, video_h: int, duration: float,
     try:
         return _create_panel_clip(panel_path, video_w, video_h, duration, fps,
                                   panel_index, bg_mode, custom_bg_path,
-                                  animation_style, panel_type=ptype)
+                                  animation_style, panel_type=ptype,
+                                  preserve_detail=panel.get('_preserve_quality_detail', False))
     except Exception as e:
         print(f"[Compositor] Error panel {panel.get('panel_id')}: {e}")
         return ColorClip(size=(video_w, video_h), color=(10, 10, 15), duration=duration)
@@ -1064,7 +1116,7 @@ def _make_panel_clip(panel: dict, video_w: int, video_h: int, duration: float,
 
 def _create_panel_clip(image_path, video_w, video_h, duration, fps, panel_index,
                        bg_mode="blur", custom_bg_path=None, animation_style="auto",
-                       panel_type="standard"):
+                       panel_type="standard", preserve_detail=False):
     """Core panel clip creator with Ken Burns or vertical-scroll animation."""
 
     img = Image.open(image_path).convert('RGB')
@@ -1099,9 +1151,12 @@ def _create_panel_clip(image_path, video_w, video_h, duration, fps, panel_index,
         headroom_scale = 1.05
         zoom_min, zoom_max = config.KEN_BURNS_ZOOM_RANGE
         base_frame = Image.fromarray(bg_array)
-        base_big = base_frame.resize(
-            (int(video_w * zoom_max * headroom_scale),
-             int(video_h * zoom_max * headroom_scale)), Image.LANCZOS)
+        base_w = int(video_w * zoom_max * headroom_scale)
+        base_h = int(video_h * zoom_max * headroom_scale)
+        sample_scale = zoom_max if preserve_detail else 1
+        base_big = base_frame.resize((round(base_w * sample_scale), round(base_h * sample_scale)), Image.LANCZOS)
+        if preserve_detail:
+            _preserve_foreground(base_big, img, fitted_w, fitted_h, ox, oy, video_w)
         base_arr = np.array(base_big)
         big_w, big_h = base_big.size
 
@@ -1164,8 +1219,8 @@ def _create_panel_clip(image_path, video_w, video_h, duration, fps, panel_index,
                 current_zoom = zoom_min
                 cx_progress, cy_progress = 0.5, 0.5
             
-            cw = int(video_w / current_zoom)
-            ch = int(video_h / current_zoom)
+            cw = round(int(video_w / current_zoom) * big_w / base_w)
+            ch = round(int(video_h / current_zoom) * big_h / base_h)
             max_x = max(big_w - cw, 0)
             max_y = max(big_h - ch, 0)
             

@@ -55,6 +55,7 @@ server.pid
 magiv2
 magiv2/
 # Note: models/ contains committed YOLO weights needed to run the app
+/models/enhancement/
 
 # ─── Unused / generated assets ───────────────────────
 logo/

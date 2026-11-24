@@ -419,11 +419,13 @@ function renderSourceStep() {
               <option value="4k_landscape">3840x2160 (4K Landscape)</option>
             </optgroup>
             <optgroup label="Portrait (9:16) - Shorts/Reels">
-              <option value="1080p">1080x1920 (1080p Portrait)</option>
-              <option value="2k">1440x2560 (2K Portrait)</option>
-              <option value="4k">2160x3840 (4K Portrait)</option>
+              <option value="1080p_portrait">1080x1920 (1080p Portrait)</option>
+              <option value="2k_portrait">1440x2560 (2K Portrait)</option>
+              <option value="4k_portrait">2160x3840 (4K Portrait)</option>
             </optgroup>
           </select>
+          <div><label><input type="checkbox" id="settingQualityEnhance"> 智能画质增强</label></div>
+          <div><label><input type="checkbox" id="settingQualityFace"> 人脸修复</label></div>
         </div>
         <div class="form-group">
           <label class="form-label">Video FPS</label>
@@ -874,6 +876,7 @@ function collectSourceSettings() {
     tts_engine: document.getElementById('settingTTSEngine').value,
     tts_voice: document.getElementById('settingTTSVoice').value,
     video_resolution: document.getElementById('settingResolution').value,
+    quality_enhancement: collectQualitySettings('setting'),
     video_fps: parseInt(document.getElementById('settingFPS').value),
     video_quality: document.getElementById('settingQuality') ? document.getElementById('settingQuality').value : 'medium',
     animation_style: document.getElementById('settingAnimation') ? document.getElementById('settingAnimation').value : 'auto',
@@ -952,7 +955,10 @@ function prefillSourceSettings(s) {
   };
   if (s.tts_engine) set('settingTTSEngine', s.tts_engine);
   refreshVoiceOptions(document.getElementById('settingTTSEngine').value, s.tts_voice);
-  set('settingResolution', s.video_resolution);
+  set('settingResolution', normalizeVideoResolution(s.video_resolution));
+  const enhancement = s.quality_enhancement || {};
+  document.getElementById('settingQualityEnhance').checked = enhancement.enabled === true;
+  document.getElementById('settingQualityFace').checked = enhancement.face === true;
   set('settingFPS', s.video_fps);
   set('settingAnimation', s.animation_style);
   if (s.bg_mode) {
@@ -3654,8 +3660,22 @@ async function runTTS() {
 }
 
 // ─── Step: Video ────────────────────────────────────────
+function collectQualitySettings(prefix) {
+  return {
+    ...APP.projectData?.settings?.quality_enhancement,
+    enabled: document.getElementById(prefix + 'QualityEnhance').checked,
+    face: document.getElementById(prefix + 'QualityFace').checked,
+  };
+}
+
+function normalizeVideoResolution(resolution) {
+  return ({'1080p': '1080p_landscape', '2k': '2k_landscape', '4k': '4k_landscape',
+    '9:16': '1080p_portrait', portrait: '1080p_portrait'})[resolution] || resolution;
+}
+
 function renderVideoStep() {
   const body = document.getElementById('stepBody');
+  const enhancement = APP.projectData?.settings?.quality_enhancement || {};
   body.innerHTML = `
     <div id="chapterNavSlot">${renderChapterNavigation()}</div>
     
@@ -3668,9 +3688,9 @@ function renderVideoStep() {
         <label class="form-label">Resolution</label>
         <select class="form-select" id="videoRes">
           <optgroup label="Portrait (9:16) - Shorts/Reels">
-            <option value="1080p">1080x1920 (1080p Portrait)</option>
-            <option value="2k">1440x2560 (2K Portrait)</option>
-            <option value="4k">2160x3840 (4K Portrait)</option>
+            <option value="1080p_portrait">1080x1920 (1080p Portrait)</option>
+            <option value="2k_portrait">1440x2560 (2K Portrait)</option>
+            <option value="4k_portrait">2160x3840 (4K Portrait)</option>
           </optgroup>
           <optgroup label="Landscape (16:9) - YouTube">
             <option value="1080p_landscape">1920x1080 (1080p Landscape)</option>
@@ -3678,6 +3698,8 @@ function renderVideoStep() {
             <option value="4k_landscape">3840x2160 (4K Landscape)</option>
           </optgroup>
         </select>
+        <div><label><input type="checkbox" id="videoQualityEnhance" ${enhancement.enabled ? 'checked' : ''}> 智能画质增强</label></div>
+        <div><label><input type="checkbox" id="videoQualityFace" ${enhancement.face ? 'checked' : ''}> 人脸修复</label></div>
       </div>
       <div class="form-group">
         <label class="form-label">Background Mode</label>
@@ -3792,6 +3814,8 @@ function renderVideoStep() {
     </div>`;
 
   const actions = document.getElementById('stepActions');
+  const resolution = normalizeVideoResolution(APP.projectData?.settings?.video_resolution);
+  if (resolution) document.getElementById('videoRes').value = resolution;
   actions.innerHTML = `
     <button class="btn btn-ghost" onclick="prevStep()">← Back</button>
     <div class="step-actions-right">
@@ -3931,6 +3955,7 @@ async function runVideo() {
   const settings = {
     pipeline_mode: APP.mode || 'dialogue',
     video_resolution: document.getElementById('videoRes')?.value || '1080p',
+    quality_enhancement: collectQualitySettings('video'),
     bg_mode: bgMode,
     animation_style: animationStyle,
   };

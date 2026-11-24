@@ -1,0 +1,2 @@
+# Optional Real-ESRGAN runtime. Use the existing app's matching torch/torchvision.
+spandrel>=0.4.1,<0.5

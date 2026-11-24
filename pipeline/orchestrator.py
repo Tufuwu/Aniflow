@@ -2896,6 +2896,7 @@ class Orchestrator:
                 quality=s.get('video_quality', 'medium'),
                 bg_mode=s.get('bg_mode', 'blur'),
                 animation_style=s.get('animation_style', 'auto'),
+                quality_enhancement=s.get('quality_enhancement'),
                 progress_callback=lambda c, t, m: self._emit_progress('scene_clips', c, t, m),
             )
             done  = [r for r in results if r.get('path') and not r.get('error')]
@@ -2928,7 +2929,8 @@ class Orchestrator:
 
     # ─── CapCut Export ────────────────────────────────────────────
     def export_capcut(self, state, settings=None):
-        return self.capcut.generate_project(state.panels, state.project_dir, settings)
+        options = {'quality_enhancement': state.settings.get('quality_enhancement'), **(settings or {})}
+        return self.capcut.generate_project(state.panels, state.project_dir, options)
 
     def export_subtitles(self, state):
         return self.capcut.get_subtitle_srt(state.panels, state.project_dir)
@@ -3138,6 +3140,7 @@ class Orchestrator:
                 export_clips=config.AUTO_PIPELINE_EXPORT_CLIPS,
                 animation_style=s.get('animation_style', 'auto'),
                 scene_mode=False,
+                quality_enhancement=s.get('quality_enhancement'),
                 progress_callback=lambda c, t, m: self._emit_progress('video', c, t, m),
             )
             state.video_path = output_path

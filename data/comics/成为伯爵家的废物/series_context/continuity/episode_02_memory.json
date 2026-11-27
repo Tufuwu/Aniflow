@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "series": "成为伯爵家的废物",
+  "purpose": "供漫画第2话写稿的上一话前情",
+  "episode": 2,
+  "source_chapter": "0004_第1話 超級有錢的爸爸？",
+  "next_source_chapter": "0005_第2話 設下的誘餌",
+  "source_script": "0004_第1话_漫画讲解稿_v4_总分调整版.txt",
+  "source_paragraph_count": 48,
+  "source_script_sha256": "88504b012366a35d9e9e1a5f7f5fa6208e3045fedfdcb98f1f18d2079b8fcfde",
+  "summary": "凯尔在伯爵府吃早餐，仆人、帕赛和戴鲁对他的正常举止接连吃惊。他向戴鲁要钱，到手金额超出预期。问过伦后得知当天是佩里斯历七百八十一年三月二十九日，据此判断崔寒很快就会到威思顿，留给自己准备的时间不多。",
+  "current_events": [
+    {
+      "id": "E01",
+      "text": "伦端水，凯尔接过后盘算伦的去向和自己的保命手段。",
+      "paragraph_range": [
+        4,
+        7
+      ],
+      "scope": "current_and_intentions"
+    },
+    {
+      "id": "E02",
+      "text": "问好吓到仆人，吃得开心让帕赛掉叉，夸红酒让戴鲁惊讶。",
+      "paragraph_range": [
+        8,
+        28
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E03",
+      "text": "戴鲁答应多给钱，凯尔到手后对金额感到惊讶，口播未报出具体钱数。",
+      "paragraph_range": [
+        29,
+        40
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E04",
+      "text": "收钱并问日期，得知当日为三月二十九日，凯尔推算崔寒很快来到威思顿。",
+      "paragraph_range": [
+        41,
+        48
+      ],
+      "scope": "current_observation_and_character_inference"
+    }
+  ],
+  "novel_recollections": [
+    "伦会跟随崔寒离开。",
+    "原主招惹崔寒后被打。",
+    "未来有战争风险。"
+  ],
+  "unresolved": [
+    "凯尔会如何准备及避开原主的下场",
+    "凯尔会选择什么保命手段",
+    "他如何处理和伦、崔寒的关系"
+  ],
+  "next_opening": {
+    "source_directory": "D:\\vscode\\3\\Aniflow\\projects\\成为伯爵家的废物\\outputs\\all_chapters_green_blocks\\chapters\\0005_第2話 設下的誘餌",
+    "image_ranges": [
+      [
+        1,
+        9
+      ],
+      [
+        15,
+        24
+      ]
+    ],
+    "verified": "凯尔乘车到茶馆外，让随行仆人回去，表示自己要待很久。",
+    "writing_focus": "从上一话的时间压力接到茶馆行动，后续动机按本话分镜揭示。"
+  }
+}

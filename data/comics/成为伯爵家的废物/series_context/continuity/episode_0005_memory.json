@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "series": "成为伯爵家的废物",
+  "purpose": "记录漫画第2话成片已讲内容与章末停点",
+  "episode": 3,
+  "comic_chapter": 2,
+  "source_chapter": "0005_第2話 設下的誘餌",
+  "source_script": "0005_第2话_漫画讲解稿_v2_口播版.txt",
+  "source_paragraph_count": 32,
+  "source_script_sha256": "4db3f2dec6b91c13f564c214995f56c65b3c620847f89304c56578b91e4fac78",
+  "source_video": "D:\\vscode\\3\\Aniflow\\projects\\成为伯爵家的废物\\episodes\\episode_0005\\production\\export\\第2话_设下的诱饵_v2_纯人声.mp4",
+  "summary": "凯尔在茶香诗语三楼看见崔寒被威思顿守卫拦下并离开。他让老板比鲁斯留位，趁天黑前去准备自保。章末凯尔站在面包摊前，打算为获取不破之盾准备诱饵。",
+  "current_events": [
+    {
+      "id": "E01",
+      "text": "凯尔推算崔寒快到威思顿，乘马车前往茶香诗语，遣走随行仆人，打算在三楼久留。",
+      "paragraph_range": [
+        1,
+        5
+      ],
+      "scope": "current_and_intentions"
+    },
+    {
+      "id": "E02",
+      "text": "比鲁斯笑着迎客。凯尔点不苦的茶和小说，交出金币；比鲁斯提到一百万格伦，凯尔让他把多的当小费。",
+      "paragraph_range": [
+        6,
+        14
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E03",
+      "text": "凯尔在三楼靠窗等崔寒，回想崔寒进城报信和原主侮辱遇害村民后挨揍的原小说情节。",
+      "paragraph_range": [
+        15,
+        20
+      ],
+      "scope": "current_and_novel_recollection"
+    },
+    {
+      "id": "E04",
+      "text": "凯尔看到崔寒被守卫拦下后转身离开，猜守卫在查身份牌。崔寒夜里翻墙及撞上醉酒原主是凯尔记得的小说走向。",
+      "paragraph_range": [
+        21,
+        24
+      ],
+      "scope": "current_observation_and_character_inference"
+    },
+    {
+      "id": "E05",
+      "text": "凯尔请比鲁斯留位并离开茶馆，听见客人惊讶他没有砸东西。",
+      "paragraph_range": [
+        25,
+        28
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E06",
+      "text": "凯尔为日后自保选中远古之力不破之盾，走到面包摊前，想到要先准备诱饵。",
+      "paragraph_range": [
+        29,
+        32
+      ],
+      "scope": "current_and_intentions"
+    }
+  ],
+  "novel_recollections": [
+    "崔寒想报告村子遭屠一事，为遇害村民办葬礼。",
+    "崔寒会等到夜里翻墙进城，遇到醉酒的原主。原主侮辱死者后被崔寒揍了一顿。",
+    "凯尔记得往后大陆各地会爆发战争。"
+  ],
+  "unresolved": [
+    "凯尔与崔寒尚未当面交谈，避开原主下场的结果未定。",
+    "诱饵仍在准备阶段，用途与取盾过程尚未交代。",
+    "凯尔尚未取得不破之盾。"
+  ],
+  "ending": {
+    "paragraph": 32,
+    "scene": "凯尔在面包摊前停下",
+    "narration": "凯尔在面包摊前停住了。想拿到不破之盾，他得先准备一点诱饵。"
+  }
+}

@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "series": "成为伯爵家的废物",
+  "purpose": "下一话写稿前情；以已讲解内容为依据",
+  "episode": 1,
+  "source_chapter": "0003_第0話 泡澡令人沉思",
+  "next_source_chapter": "0004_第1話 超級有錢的爸爸？",
+  "source_script": "0003_第0话_漫画讲解稿_v2_口播版.txt",
+  "source_paragraph_count": 49,
+  "summary": "金路水读过《英雄的诞生》前五卷，醒来变成凯尔·海图斯。他在浴室检查肋下没有断桌腿造成的伤疤，据此判断自己还有机会避免原小说中醉酒挑衅崔寒、遭到暴揍的结局。他决定少惹事，利用伯爵家的条件过清闲生活。结尾走出浴缸、拿起毛巾，想到东西两片大陆将卷入战争，仅躲开挨打还不足以保证安稳。",
+  "current_events": [
+    {
+      "id": "E01",
+      "text": "金路水醒来变成凯尔，在镜子里确认身份，泡澡思考今后的生活。",
+      "paragraphs": [
+        24,
+        25,
+        26,
+        27,
+        28
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E02",
+      "text": "他怕疼、怕死，对回原世界并不急切，想利用伯爵家的条件把日子过舒服。",
+      "paragraphs": [
+        29,
+        30,
+        31,
+        32
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E03",
+      "text": "检查肋下没有伤疤，依据小说顺序判断还没碰上崔寒，有机会避免冲突。",
+      "paragraphs": [
+        33,
+        34,
+        35,
+        39,
+        40,
+        41,
+        42
+      ],
+      "scope": "current_observation_and_character_inference"
+    },
+    {
+      "id": "E04",
+      "text": "决定不照原主的做法醉酒招惹崔寒，争取清闲生活。",
+      "paragraphs": [
+        43,
+        45
+      ],
+      "scope": "current_intention_not_completed"
+    },
+    {
+      "id": "E05",
+      "text": "走出浴缸，拿起毛巾，想到利用记得的情报改变下场，并意识到未来战争风险。",
+      "paragraphs": [
+        46,
+        47,
+        48,
+        49
+      ],
+      "scope": "current"
+    }
+  ],
+  "novel_recollections": [
+    {
+      "id": "R01",
+      "text": "崔寒离开黑暗森林，在海里斯村得到接纳。为照顾他的妇人采药期间村庄被屠；他杀死现场杀手、埋葬村民，决心追查神秘组织。",
+      "paragraphs": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ],
+      "scope": "novel_recollection_not_current_timeline_confirmation"
+    },
+    {
+      "id": "R02",
+      "text": "原小说中崔寒来到威思顿，醉酒的原主凯尔挑衅他，被他打了一顿。",
+      "paragraphs": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "scope": "novel_recollection_not_current_meeting"
+    },
+    {
+      "id": "R03",
+      "text": "原主在相遇前醉酒砸东西，被断桌腿扎伤肋下；这不是崔寒造成的伤。",
+      "paragraphs": [
+        35,
+        36,
+        37,
+        38
+      ],
+      "scope": "novel_recollection_timeline_marker"
+    }
+  ],
+  "known_novel_future": [
+    {
+      "id": "F01",
+      "text": "金路水记得崔寒将遇到同伴、得到机缘并成长为英雄。",
+      "paragraphs": [
+        44
+      ],
+      "scope": "character_knowledge_of_novel_future"
+    },
+    {
+      "id": "F02",
+      "text": "金路水记得东西两片大陆将卷入战争。",
+      "paragraphs": [
+        49
+      ],
+      "scope": "character_knowledge_of_novel_future_not_current_war"
+    }
+  ],
+  "character_states": [
+    {
+      "id": "cale_current",
+      "names": [
+        "金路水",
+        "凯尔·海图斯"
+      ],
+      "identity": "金路水是穿越者，凯尔是当前身体和身份",
+      "location": "浴室；已走出浴缸并拿起毛巾",
+      "goals": [
+        "避免招惹崔寒和挨打",
+        "保命、少受罪、过清闲生活"
+      ],
+      "knowledge_limit": "读过小说前五卷；不等于全知",
+      "current_actions_completed": [
+        "确认身份",
+        "检查肋下无疤"
+      ],
+      "intentions_only": [
+        "避免原主的醉酒惹事行为",
+        "利用剧情情报改变下场"
+      ],
+      "sources": [
+        24,
+        25,
+        28,
+        32,
+        40,
+        41,
+        43,
+        45,
+        46,
+        47,
+        48
+      ]
+    },
+    {
+      "id": "choi_han",
+      "names": [
+        "崔寒"
+      ],
+      "role": "《英雄的诞生》男主；另一位来到异世界的人",
+      "disclosed_background": "黑暗森林、海里斯村、屠村与追查组织",
+      "current_location": "本集未确认",
+      "relationship_to_cale_current": "本集未展示穿越后见面",
+      "sources": [
+        6,
+        8,
+        9,
+        10,
+        11,
+        12,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23
+      ]
+    }
+  ],
+  "open_threads": [
+    "避开原小说中的暴揍",
+    "在未来战争风险下争取安稳生活",
+    "把已知剧情情报变成具体行动",
+    "海里斯村惨剧幕后主使和动机"
+  ],
+  "ending_anchor": "走出浴缸、拿起毛巾；从避开挨打转向考虑未来的生存与安稳。",
+  "next_episode_opening_suggestion": "穿成伯爵家的废物少爷后，金路水先确认了一件事：原小说里那顿暴揍，还有机会躲。可他想要的，是往后都能过上清闲日子。",
+  "do_not_repeat": [
+    "完整的森林与灭村回顾",
+    "镜子认人、泡澡、查疤和桌腿来历的完整过程",
+    "一整套穿越设定介绍"
+  ],
+  "continuity_constraints": [
+    "原小说回忆不可写成穿越后已经发生的相遇",
+    "伤在肋下，断桌腿扎伤，不是崔寒打伤",
+    "无疤是判断时间的线索，不是挨打的原因",
+    "不可写成主角已招募崔寒或获得力量",
+    "战争是小说未来情报，当前未开战",
+    "封面黑龙和双猫不代表当前剧情已经认识或收服",
+    "下一话事实必须以0004实际内容为依据"
+  ],
+  "production": {
+    "cover_policy": "后续统一复用最新版无字封面",
+    "cover_revision": "去掉下方空白和左上角小框",
+    "episode_01_export_speed": 1.25,
+    "episode_01_shot_count": 37,
+    "bgm_preference": "纯音乐、异世界氛围、轻声垫底，减少口播单调",
+    "bgm_choice": "未确认",
+    "bgm_added_to_delivered_video": false
+  },
+  "source_review": "按最终使用的第二版口播稿人工整理；未冒充程序中的审核通过状态",
+  "source_script_path": "D:\\vscode\\3\\Aniflow\\projects\\成为伯爵家的废物\\episodes\\episode_0003\\scripts\\0003_第0话_漫画讲解稿_v2_口播版.txt",
+  "source_script_sha256": "7b38649afd3774bd5ff10339f2051b260eadf73d95fefeda6528f5a8db3f196d",
+  "created_date": "2026-11-17"
+}

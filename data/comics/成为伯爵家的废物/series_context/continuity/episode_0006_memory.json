@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "series": "成为伯爵家的废物",
+  "purpose": "记录漫画第3话 v3 成片已讲内容与章末停点",
+  "episode": 4,
+  "comic_chapter": 3,
+  "source_chapter": "0006_第3話 給我盡情的吃！",
+  "source_script": "0006_第3话_漫画讲解稿_v3_口播版.txt",
+  "source_paragraph_count": 26,
+  "source_script_sha256": "171e755e65e0cf86cf838c3b99eb9524cb4b42aebf2cbd2d7d9f44dda6260b06",
+  "source_video": "D:\\vscode\\3\\Aniflow\\projects\\成为伯爵家的废物\\episodes\\episode_0006\\production\\v3\\export\\第3话_给我尽情地吃_v3_纯人声.mp4",
+  "summary": "凯尔用金币买下一大袋面包，扛上山坡找藏有不破之盾的古树。无名姐弟出言劝阻，他扔给他们两个纸包面包，用自己的坏名声支开他们。试喂时树洞吞掉第一块面包，洞里仍黑；本话停在凯尔把剩下的面包倒向树洞。",
+  "current_events": [
+    {
+      "id": "E01",
+      "text": "开场预叙孩子的警告，随后切回凯尔在面包摊用金币买下一大袋面包，准备取盾的诱饵。",
+      "paragraph_range": [
+        1,
+        5
+      ],
+      "scope": "current_with_flashforward"
+    },
+    {
+      "id": "E02",
+      "text": "镇民避开凯尔并私下议论。灰发女孩和红发男孩跟上来。凯尔登上山坡、推开破木门，姐弟从墙外警告古树会吃人。",
+      "paragraph_range": [
+        6,
+        10
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E03",
+      "text": "据传在树上吊死的人一夜变成干尸。凯尔认出目标；按书中记载，侍奉神明的人因贪吃被逐，后来饿死，树留下了其怨念与不破之盾。",
+      "paragraph_range": [
+        11,
+        14
+      ],
+      "scope": "rumor_and_novel_recollection"
+    },
+    {
+      "id": "E04",
+      "text": "凯尔扔给姐弟两个纸包面包，用流氓凯尔的名声支开他们；姐姐离开前叮嘱他别死。",
+      "paragraph_range": [
+        15,
+        20
+      ],
+      "scope": "current"
+    },
+    {
+      "id": "E05",
+      "text": "第一块面包被树洞吞掉，凯尔缩回手，黑暗未散。按书里的做法继续喂，黑暗散后才会露出光。凯尔倒出剩下的面包。",
+      "paragraph_range": [
+        21,
+        26
+      ],
+      "scope": "current_and_novel_recollection"
+    }
+  ],
+  "novel_recollections": [
+    "饿死之人的怨念形成树洞里的黑暗，树中留下远古之力不破之盾。",
+    "要继续喂食，直到黑暗散去才会露出光；光和盾在本话没有作为当下结果出现。"
+  ],
+  "unresolved": [
+    "一袋面包倒完后的效果尚未呈现，凯尔尚未取得不破之盾。",
+    "姐弟没有具名，种族和身份未揭晓。",
+    "凯尔与崔寒尚未当面交谈；崔寒被守卫拦下后暂未再现身。"
+  ],
+  "ending": {
+    "paragraph": 26,
+    "scene": "凯尔拎袋往树洞里倒面包，念完末句切黑",
+    "narration": "“给我尽情地吃吧。”"
+  }
+}
